@@ -1,3 +1,5 @@
+import 'editor_bracket_matcher.dart';
+
 /// Small, deterministic editing helpers used by the Bisho IDE editor.
 ///
 /// The helpers only transform a single character typed at the caret. They do
@@ -13,6 +15,57 @@ class EditorEditResult {
 class EditorEditingAssist {
   const EditorEditingAssist._();
 
+
+  /// Aligns a newly typed closing delimiter with its matching opener.
+  ///
+  /// The edit is applied only when the closing delimiter is the first
+  /// non-whitespace character on its line. Matching is delegated to the
+  /// language-aware bracket scanner, which ignores common strings/comments.
+  static EditorEditResult? alignClosingDelimiter({
+    required String previousText,
+    required String currentText,
+    required int cursorOffset,
+    required String language,
+  }) {
+    if (currentText.length != previousText.length + 1) return null;
+    if (cursorOffset < 1 || cursorOffset > currentText.length) return null;
+
+    final delimiterOffset = cursorOffset - 1;
+    final delimiter = currentText[delimiterOffset];
+    if (!')]}'.contains(delimiter)) return null;
+    if (currentText.substring(0, delimiterOffset) !=
+            previousText.substring(0, delimiterOffset) ||
+        currentText.substring(cursorOffset) !=
+            previousText.substring(delimiterOffset)) {
+      return null;
+    }
+
+    final lineStart = currentText.lastIndexOf('\n', delimiterOffset - 1) + 1;
+    final leading = currentText.substring(lineStart, delimiterOffset);
+    if (!RegExp(r'^[\t ]*$').hasMatch(leading)) return null;
+
+    final openingOffset = EditorBracketMatcher.findMatchingOffset(
+      source: currentText,
+      cursorOffset: cursorOffset,
+      language: language,
+    );
+    if (openingOffset == null || openingOffset >= delimiterOffset) return null;
+
+    final openingLineStart = currentText.lastIndexOf('\n', openingOffset - 1) + 1;
+    final openingLineEnd = currentText.indexOf('\n', openingLineStart);
+    final openingLine = currentText.substring(
+      openingLineStart,
+      openingLineEnd == -1 ? currentText.length : openingLineEnd,
+    );
+    final openingIndent = RegExp(r'^[\t ]*').firstMatch(openingLine)?.group(0) ?? '';
+    if (leading == openingIndent) return null;
+
+    final updated = currentText.replaceRange(lineStart, delimiterOffset, openingIndent);
+    final adjustedCursor = (cursorOffset + openingIndent.length - leading.length)
+        .clamp(0, updated.length)
+        .toInt();
+    return EditorEditResult(text: updated, cursorOffset: adjustedCursor);
+  }
 
   /// Skips over an already-present closing delimiter when the user types it.
   /// This prevents duplicate closers after automatic pair insertion.

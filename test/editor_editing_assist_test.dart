@@ -58,6 +58,28 @@ void main() {
       expect(result.cursorOffset, 4);
     });
 
+    test('aligns a typed closing brace with its matching opener', () {
+      final result = EditorEditingAssist.alignClosingDelimiter(
+        previousText: '  {\n    ',
+        currentText: '  {\n    }',
+        cursorOffset: 9,
+        language: 'Dart',
+      );
+      expect(result, isNotNull);
+      expect(result!.text, '  {\n  }');
+      expect(result.cursorOffset, 7);
+    });
+
+    test('does not align delimiters typed after code on the same line', () {
+      final result = EditorEditingAssist.alignClosingDelimiter(
+        previousText: '  {\n    value',
+        currentText: '  {\n    value}',
+        cursorOffset: 14,
+        language: 'Dart',
+      );
+      expect(result, isNull);
+    });
+
     test('does not alter a multi-character paste', () {
       final result = EditorEditingAssist.autoIndentNewline(
         previousText: 'abc',

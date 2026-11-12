@@ -13,6 +13,16 @@ void main() {
       expect(result, contains('const '));
     });
 
+    test('prioritizes contextual snippets over generic keywords on ties', () {
+      final result = EditorCompletionEngine.rank(
+        language: 'JavaScript',
+        prefix: 'con',
+        snippets: ['console.log()', 'const '],
+      );
+      expect(result.first, 'console.log()');
+      expect(result, contains('const'));
+    });
+
     test('includes language keywords and supplied snippets', () {
       final result = EditorCompletionEngine.rank(
         language: 'Python',
@@ -22,6 +32,24 @@ void main() {
       expect(result, contains('def'));
       expect(result, contains('def '));
       expect(result, isNot(contains('print()')));
+    });
+
+    test('matches camelCase and snake_case word initials', () {
+      final camelCase = EditorCompletionEngine.rank(
+        language: 'JavaScript',
+        prefix: 'cl',
+        snippets: ['createLayout', 'clearCache', 'closeFile'],
+      );
+      expect(camelCase, contains('createLayout'));
+      expect(camelCase, contains('clearCache'));
+      expect(camelCase, contains('closeFile'));
+
+      final snakeCase = EditorCompletionEngine.rank(
+        language: 'Python',
+        prefix: 'lf',
+        snippets: ['load_file', 'list_files'],
+      );
+      expect(snakeCase, contains('load_file'));
     });
 
     test('supports subsequence matching when no direct match exists', () {

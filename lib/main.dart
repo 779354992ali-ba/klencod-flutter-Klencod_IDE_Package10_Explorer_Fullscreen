@@ -308,6 +308,7 @@ class _EditorScreenState extends State<EditorScreen> with WidgetsBindingObserver
         _tryDeletePairedOpeningDelimiter(tab, previousText);
         _trySkipExistingClosingDelimiter(tab, previousText);
         _tryInsertClosingPair(tab, previousText);
+        _tryAlignClosingDelimiter(tab, previousText);
         _tryAutoIndentNewline(tab, previousText);
       }
 
@@ -399,6 +400,29 @@ class _EditorScreenState extends State<EditorScreen> with WidgetsBindingObserver
       previousText: previousText,
       currentText: controller.text,
       cursorOffset: controller.selection.extentOffset,
+    );
+    if (result == null) return;
+
+    _autoPairApplying.add(tab.id);
+    try {
+      controller.value = TextEditingValue(
+        text: result.text,
+        selection: TextSelection.collapsed(offset: result.cursorOffset),
+      );
+    } finally {
+      _autoPairApplying.remove(tab.id);
+    }
+  }
+
+  void _tryAlignClosingDelimiter(EditorTab tab, String previousText) {
+    final controller = tab.controller;
+    final selection = controller.selection;
+    if (!selection.isValid || !selection.isCollapsed) return;
+    final result = EditorEditingAssist.alignClosingDelimiter(
+      previousText: previousText,
+      currentText: controller.text,
+      cursorOffset: selection.extentOffset,
+      language: tab.language,
     );
     if (result == null) return;
 
@@ -3168,6 +3192,32 @@ class _EditorScreenState extends State<EditorScreen> with WidgetsBindingObserver
     );
   }
 
+  void _openEditorFullScreen() {
+    if (_editorFullScreen || tabs.isEmpty) return;
+
+    // Remove the embedded CodeField first. A CodeController should not be
+    // attached to two CodeFields at the same time while the route animates.
+    setState(() => _editorFullScreen = true);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      Navigator.of(context)
+          .push(
+            MaterialPageRoute<void>(
+              builder: (_) => EditorFullScreenScreen(
+                tab: activeTab,
+                fontSize: _editorFontSize,
+                onSave: saveCurrentToDisk,
+                onFontSizeChange: changeEditorFontSize,
+                onShowCompletions: showCodeCompletions,
+              ),
+            ),
+          )
+          .whenComplete(() {
+            if (mounted) setState(() => _editorFullScreen = false);
+          });
+    });
+  }
+
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
@@ -3188,6 +3238,15 @@ class _EditorScreenState extends State<EditorScreen> with WidgetsBindingObserver
         body: Center(
           child: CircularProgressIndicator(),
         ),
+      );
+    }
+
+    if (_editorFullScreen) {
+      // The actual editor is displayed by EditorFullScreenScreen on its own
+      // route. Keep this route lightweight while it is underneath.
+      return const Scaffold(
+        backgroundColor: Color(0xFF080D19),
+        body: Center(child: CircularProgressIndicator()),
       );
     }
 
@@ -3236,7 +3295,7 @@ class _EditorScreenState extends State<EditorScreen> with WidgetsBindingObserver
               tooltip: 'معاينة Flutter',
             ),
             IconButton(
-              onPressed: () => setState(() => _editorFullScreen = true),
+              onPressed: _openEditorFullScreen,
               icon: const Icon(Icons.code),
               tooltip: 'فتح المحرر في شاشة كاملة',
             ),
@@ -3548,6 +3607,134 @@ class _EditorScreenState extends State<EditorScreen> with WidgetsBindingObserver
                 style: const TextStyle(fontSize: 10),
               ),
             ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// شاشة مستقلة للمحرر؛ تستخدم نفس CodeController حتى تبقى التعديلات
+/// والتبويبات والحالة محفوظة عند الرجوع إلى الواجهة الرئيسية.
+class EditorFullScreenScreen extends StatefulWidget {
+  const EditorFullScreenScreen({
+    super.key,
+    required this.tab,
+    required this.fontSize,
+    required this.onSave,
+    required this.onFontSizeChange,
+    required this.onShowCompletions,
+  });
+
+  final EditorTab tab;
+  final double fontSize;
+  final Future<void> Function() onSave;
+  final void Function(double delta) onFontSizeChange;
+  final Future<void> Function() onShowCompletions;
+
+  @override
+  State<EditorFullScreenScreen> createState() =>
+      _EditorFullScreenScreenState();
+}
+
+class _EditorFullScreenScreenState extends State<EditorFullScreenScreen> {
+  late double _fontSize;
+
+  @override
+  void initState() {
+    super.initState();
+    _fontSize = widget.fontSize;
+  }
+
+  void _changeFontSize(double delta) {
+    widget.onFontSizeChange(delta);
+    setState(() {
+      _fontSize = (_fontSize + delta).clamp(10.0, 24.0).toDouble();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final tab = widget.tab;
+    return Directionality(
+      textDirection: TextDirection.rtl,
+      child: Scaffold(
+        backgroundColor: const Color(0xFF080D19),
+        appBar: AppBar(
+          backgroundColor: const Color(0xFF151C30),
+          leading: IconButton(
+            tooltip: 'العودة إلى Bisho IDE',
+            icon: const Icon(Icons.arrow_back),
+            onPressed: () => Navigator.of(context).pop(),
+          ),
+          title: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                tab.fileName,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+              ),
+              Text(
+                tab.language,
+                style: const TextStyle(fontSize: 11, color: Color(0xFF38BDF8)),
+              ),
+            ],
+          ),
+          actions: [
+            IconButton(
+              tooltip: 'إكمال تلقائي',
+              onPressed: widget.onShowCompletions,
+              icon: const Icon(Icons.auto_awesome),
+            ),
+            IconButton(
+              tooltip: 'تصغير الخط',
+              onPressed: () => _changeFontSize(-1),
+              icon: const Icon(Icons.text_decrease),
+            ),
+            IconButton(
+              tooltip: 'تكبير الخط',
+              onPressed: () => _changeFontSize(1),
+              icon: const Icon(Icons.text_increase),
+            ),
+            IconButton(
+              tooltip: 'حفظ الملف',
+              onPressed: widget.onSave,
+              icon: const Icon(Icons.save),
+            ),
+          ],
+        ),
+        body: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(6, 6, 6, 8),
+            child: Container(
+              decoration: BoxDecoration(
+                color: const Color(0xFF080D19),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: const Color(0xFF26334D)),
+              ),
+              clipBehavior: Clip.antiAlias,
+              child: CodeTheme(
+                data: CodeThemeData(styles: monokaiSublimeTheme),
+                child: CodeField(
+                  key: ValueKey('fullscreen-${tab.id}'),
+                  controller: tab.controller,
+                  expands: true,
+                  wrap: false,
+                  padding: const EdgeInsets.all(14),
+                  textStyle: TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: _fontSize,
+                  ),
+                  gutterStyle: const GutterStyle(
+                    showLineNumbers: true,
+                    showErrors: true,
+                    showFoldingHandles: true,
+                  ),
+                ),
+              ),
+            ),
           ),
         ),
       ),
