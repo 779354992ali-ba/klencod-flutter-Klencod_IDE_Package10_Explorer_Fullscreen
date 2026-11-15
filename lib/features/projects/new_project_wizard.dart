@@ -1366,6 +1366,10 @@ description: ${jsonEncode(description)}
   }
 
   void _appendTemplateFiles(Map<String, String> files) {
+    final entry = _actualEntryFile.isEmpty ? _defaultEntryFile : _actualEntryFile;
+    final version = _versionController.text.trim().isEmpty
+        ? '1.0.0'
+        : _versionController.text.trim();
     switch (_selectedLanguage) {
       case 'Flutter':
         if (_selectedTemplate == 'multi_page') {

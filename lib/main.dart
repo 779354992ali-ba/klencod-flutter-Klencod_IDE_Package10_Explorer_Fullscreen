@@ -2464,7 +2464,7 @@ class _EditorScreenState extends State<EditorScreen> with WidgetsBindingObserver
                     leading: const Icon(Icons.restore_rounded),
                     title: Text(item.createdAt.toLocal().toString(), maxLines: 1, overflow: TextOverflow.ellipsis),
                     subtitle: Text('${item.fileCount} ملف · ${item.directoryCount} مجلد · ${(item.totalBytes / 1048576).toStringAsFixed(2)} MB'),
-                    trailing: Wrap(mainAxisSize: MainAxisSize.min, children: [
+                    trailing: Wrap(children: [
                       IconButton(
                         tooltip: 'استعادة هذه النقطة', icon: const Icon(Icons.settings_backup_restore_rounded),
                         onPressed: () => Navigator.pop(dialogContext, {'action': 'restore', 'snapshot': item}),
