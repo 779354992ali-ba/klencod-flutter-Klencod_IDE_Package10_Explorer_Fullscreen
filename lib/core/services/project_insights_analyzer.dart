@@ -127,7 +127,9 @@ class ProjectInsightsAnalyzer {
                 'الحزمة "$package" مستخدمة في الاستيراد لكنها غير معلنة في pubspec.yaml.',
                 ProjectInsightSeverity.warning, ProjectInsightCategory.dependencies);
           }
-        } else if (target.startsWith('.') &&
+        } else if ((target.startsWith('.') ||
+                (path.endsWith('.dart') &&
+                    !RegExp(r'^[A-Za-z][A-Za-z0-9+.-]*:').hasMatch(target))) &&
             (path.endsWith('.dart') || path.endsWith('.js') || path.endsWith('.ts') ||
              path.endsWith('.jsx') || path.endsWith('.tsx'))) {
           final resolved = _resolveRelative(path, target);
