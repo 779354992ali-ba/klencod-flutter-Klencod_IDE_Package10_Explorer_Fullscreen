@@ -2,6 +2,11 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+
+import '../../core/services/project_input_validator.dart';
+import '../../core/services/project_file_plan_validator.dart';
+import '../../core/languages/language_identity.dart';
 
 /// معلومات مجلد الحفظ الذي يختاره المستخدم عبر SAF.
 class ProjectSaveLocation {
@@ -48,6 +53,7 @@ class NewProjectWizard extends StatefulWidget {
   ) writeFile;
 
   final Future<void> Function(CreatedProjectInfo project) onCreated;
+  final Future<void> Function(String rootUri)? deleteDirectoryTree;
 
   const NewProjectWizard({
     super.key,
@@ -55,6 +61,7 @@ class NewProjectWizard extends StatefulWidget {
     required this.createDirectory,
     required this.writeFile,
     required this.onCreated,
+    this.deleteDirectoryTree,
   });
 
   static Future<void> show(
@@ -71,6 +78,7 @@ class NewProjectWizard extends StatefulWidget {
       List<int> bytes,
     ) writeFile,
     required Future<void> Function(CreatedProjectInfo project) onCreated,
+    Future<void> Function(String rootUri)? deleteDirectoryTree,
   }) {
     return showModalBottomSheet<void>(
       context: context,
@@ -83,6 +91,7 @@ class NewProjectWizard extends StatefulWidget {
           createDirectory: createDirectory,
           writeFile: writeFile,
           onCreated: onCreated,
+          deleteDirectoryTree: deleteDirectoryTree,
         );
       },
     );
@@ -135,6 +144,29 @@ class _NewProjectWizardState extends State<NewProjectWizard> {
   ProjectSaveLocation? _saveLocation;
 
   String _selectedLanguage = 'Flutter';
+  String _projectMode = 'basic';
+  String _selectedTemplate = 'basic';
+
+  List<String> get _availableTemplates {
+    switch (_selectedLanguage) {
+      case 'Flutter': return const ['basic', 'multi_page', 'login', 'firebase', 'multilingual'];
+      case 'HTML': case 'JavaScript': case 'TypeScript': case 'CSS':
+        return const ['basic', 'multi_page', 'dashboard'];
+      case 'Python': return const ['basic', 'cli', 'flask', 'fastapi'];
+      case 'Java': case 'Kotlin': return const ['basic', 'multi_file', 'android'];
+      default: return const ['basic', 'multi_file'];
+    }
+  }
+
+  String _templateLabel(String value) {
+    const labels = <String, String>{
+      'basic': 'أساسي', 'multi_page': 'متعدد الصفحات', 'login': 'تسجيل دخول',
+      'firebase': 'Firebase', 'multilingual': 'متعدد اللغات',
+      'dashboard': 'لوحة تحكم', 'cli': 'سطر أوامر', 'flask': 'Flask',
+      'fastapi': 'FastAPI', 'multi_file': 'متعدد الملفات', 'android': 'Android',
+    };
+    return labels[value] ?? value;
+  }
 
   static const List<String> _languages = [
     'Flutter',
@@ -155,6 +187,10 @@ class _NewProjectWizardState extends State<NewProjectWizard> {
     'Go',
     'Rust',
     'PHP',
+    'C#',
+    'Ruby',
+    'XML',
+    'YAML',
   ];
 
   String get _projectName => _nameController.text.trim();
@@ -163,23 +199,8 @@ class _NewProjectWizardState extends State<NewProjectWizard> {
   ///
   /// نستخدم الشرطة السفلية بدل الشرطة العادية حتى يكون الاسم
   /// مناسبًا أيضًا لأسماء حزم Dart وFlutter.
-  String get _safeProjectName {
-    var value = _projectName
-        .toLowerCase()
-        .replaceAll(RegExp(r'[^a-z0-9_]'), '_')
-        .replaceAll(RegExp(r'_+'), '_')
-        .replaceAll(RegExp(r'^_+|_+$'), '');
-
-    if (value.isEmpty) {
-      value = 'my_project';
-    }
-
-    if (RegExp(r'^[0-9]').hasMatch(value)) {
-      value = 'project_$value';
-    }
-
-    return value;
-  }
+  String get _safeProjectName =>
+      ProjectInputValidator.safeProjectName(_projectName);
 
   bool get _isFlutter => _selectedLanguage == 'Flutter';
 
@@ -188,11 +209,12 @@ class _NewProjectWizardState extends State<NewProjectWizard> {
   /// Java يعتمد على اسم الحزمة، لذلك لا نستخدم المسار العام
   /// الموجود في حقل ملف البداية لتحديد موقع Main.java.
   String get _actualEntryFile {
-    if (_selectedLanguage == 'Java') {
-      final packagePath =
-          _packageController.text.trim().replaceAll('.', '/');
-
-      return 'src/$packagePath/Main.java';
+    if (_selectedLanguage == 'Java' || _selectedLanguage == 'Kotlin') {
+      final packagePath = _packageController.text.trim().replaceAll('.', '/');
+      if (_selectedTemplate == 'android') {
+        return 'app/src/main/java/$packagePath/MainActivity.${_selectedLanguage == 'Java' ? 'java' : 'kt'}';
+      }
+      if (_selectedLanguage == 'Java') return 'src/$packagePath/Main.java';
     }
 
     return _entryController.text.trim();
@@ -235,6 +257,14 @@ class _NewProjectWizardState extends State<NewProjectWizard> {
         return 'src/main.rs';
       case 'PHP':
         return 'public/index.php';
+      case 'C#':
+        return 'src/Program.cs';
+      case 'Ruby':
+        return 'main.rb';
+      case 'XML':
+        return 'document.xml';
+      case 'YAML':
+        return 'config.yaml';
       default:
         return 'README.md';
     }
@@ -245,6 +275,7 @@ class _NewProjectWizardState extends State<NewProjectWizard> {
     super.initState();
 
     _entryController.text = _defaultEntryFile;
+    _packageController.text = 'com.example.app';
   }
 
   @override
@@ -269,10 +300,11 @@ class _NewProjectWizardState extends State<NewProjectWizard> {
   void _selectLanguage(String language) {
     setState(() {
       _selectedLanguage = language;
+      _selectedTemplate = 'basic';
       _entryController.text = _defaultEntryFile;
       _errorMessage = null;
 
-      if (language == 'Java') {
+      if (language == 'Java' || language == 'Kotlin' || language == 'Flutter') {
         _packageController.text = 'com.example.$_safeProjectName';
       } else {
         _packageController.text = _safeProjectName;
@@ -285,93 +317,29 @@ class _NewProjectWizardState extends State<NewProjectWizard> {
     });
   }
 
-  bool _isValidProjectName(String name) {
-    if (name.isEmpty) return false;
+  bool _isValidProjectName(String name) =>
+      ProjectInputValidator.isValidProjectName(name);
 
-    if (name == '.' || name == '..') return false;
+  bool _isValidRelativePath(String path) =>
+      ProjectInputValidator.isValidRelativePath(path);
 
-    if (name.contains('/') || name.contains('\\')) {
-      return false;
-    }
+  bool _isValidPackageName(String value) =>
+      ProjectInputValidator.isValidPackageName(value);
 
-    if (name.contains(':')) return false;
+  bool _isValidVersion(String value) =>
+      ProjectInputValidator.isValidVersion(value);
 
-    if (name.contains('\u0000')) return false;
+  bool _isValidSdkConstraint(String value) =>
+      ProjectInputValidator.isValidSdkConstraint(value);
 
-    return true;
-  }
+  bool _isValidGoModule(String value) =>
+      ProjectInputValidator.isValidGoModule(value);
 
-  bool _isValidRelativePath(String path) {
-    if (path.isEmpty) return false;
+  bool _isValidPythonVersion(String value) =>
+      ProjectInputValidator.isValidPythonVersion(value);
 
-    if (path.startsWith('/') || path.startsWith('\\')) {
-      return false;
-    }
-
-    if (path.contains('\\')) return false;
-
-    if (path.contains('\u0000')) return false;
-
-    final segments = path.split('/');
-
-    if (segments.any((segment) {
-      return segment.isEmpty ||
-          segment == '.' ||
-          segment == '..';
-    })) {
-      return false;
-    }
-
-    return true;
-  }
-
-  bool _isValidPackageName(String value) {
-    if (value.isEmpty) return false;
-
-    final parts = value.split('.');
-
-    if (parts.length < 2) return false;
-
-    final identifier = RegExp(r'^[a-zA-Z_][a-zA-Z0-9_]*$');
-
-    return parts.every(identifier.hasMatch);
-  }
-
-  bool _isValidVersion(String value) {
-    return RegExp(
-      r'^\d+\.\d+\.\d+([+-][0-9A-Za-z.-]+)?$',
-    ).hasMatch(value);
-  }
-
-  bool _isValidSdkConstraint(String value) {
-    if (value.isEmpty) return false;
-
-    return RegExp(
-      r'^[0-9a-zA-Z.<>=^~+\-\s]+$',
-    ).hasMatch(value);
-  }
-
-  bool _isValidGoModule(String value) {
-    if (value.isEmpty) return false;
-
-    if (value.contains(' ')) return false;
-
-    if (value.startsWith('/') || value.endsWith('/')) {
-      return false;
-    }
-
-    if (value.contains('\\')) return false;
-
-    return true;
-  }
-
-  bool _isValidPythonVersion(String value) {
-    return RegExp(r'^\d+\.\d+$').hasMatch(value);
-  }
-
-  bool _isValidNodeVersion(String value) {
-    return RegExp(r'^\d+$').hasMatch(value);
-  }
+  bool _isValidNodeVersion(String value) =>
+      ProjectInputValidator.isValidNodeVersion(value);
 
   void _showError(String message) {
     if (!mounted) return;
@@ -386,6 +354,10 @@ class _NewProjectWizardState extends State<NewProjectWizard> {
       if (!_isValidProjectName(_projectName)) {
         _showError('اسم المشروع غير صالح. أدخل اسمًا صحيحًا.');
         return;
+      }
+      if (_isFlutter && (_packageController.text.trim().isEmpty ||
+          _packageController.text.trim() == 'com.example.app')) {
+        _packageController.text = 'com.example.$_safeProjectName';
       }
     }
 
@@ -437,7 +409,7 @@ class _NewProjectWizardState extends State<NewProjectWizard> {
         }
       }
 
-      if (_selectedLanguage == 'Java') {
+      if (_selectedLanguage == 'Java' || _isFlutter) {
         if (!_isValidPackageName(
           _packageController.text.trim(),
         )) {
@@ -541,6 +513,9 @@ class _NewProjectWizardState extends State<NewProjectWizard> {
 
   String _mimeType(String fileName) {
     final lower = fileName.toLowerCase();
+    if (lower == 'gradlew') return 'text/x-shellscript';
+    if (lower.endsWith('.jar')) return 'application/java-archive';
+    if (lower.endsWith('.bat') || lower.endsWith('.properties')) return 'text/plain';
 
     if (lower.endsWith('.dart')) return 'text/x-dart';
     if (lower.endsWith('.py')) return 'text/x-python';
@@ -568,6 +543,8 @@ class _NewProjectWizardState extends State<NewProjectWizard> {
     if (lower.endsWith('.go')) return 'text/x-go';
     if (lower.endsWith('.rs')) return 'text/x-rust';
     if (lower.endsWith('.php')) return 'application/x-httpd-php';
+    if (lower.endsWith('.cs')) return 'text/plain';
+    if (lower.endsWith('.rb')) return 'text/x-ruby';
     if (lower.endsWith('.toml')) return 'application/toml';
     if (lower.endsWith('.yaml') || lower.endsWith('.yml')) {
       return 'application/yaml';
@@ -576,6 +553,27 @@ class _NewProjectWizardState extends State<NewProjectWizard> {
     if (lower.endsWith('.gitignore')) return 'text/plain';
 
     return 'text/plain';
+  }
+
+  Future<void> _writeRelativeBytes(
+    String rootUri,
+    String relativePath,
+    List<int> bytes,
+  ) async {
+    if (!_isValidRelativePath(relativePath)) {
+      throw Exception('مسار ملف غير آمن: $relativePath');
+    }
+    final segments = relativePath.split('/');
+    var currentUri = rootUri;
+    for (var i = 0; i < segments.length - 1; i++) {
+      currentUri = await widget.createDirectory(currentUri, segments[i]);
+    }
+    await widget.writeFile(
+      currentUri,
+      segments.last,
+      _mimeType(segments.last),
+      bytes,
+    );
   }
 
   Future<void> _writeRelativeFile(
@@ -610,6 +608,8 @@ class _NewProjectWizardState extends State<NewProjectWizard> {
 
   Future<void> _createProject() async {
     final location = _saveLocation;
+    String? createdRootUri;
+    var projectFilesCommitted = false;
 
     if (location == null || _isCreating) return;
 
@@ -631,18 +631,49 @@ class _NewProjectWizardState extends State<NewProjectWizard> {
         files['.gitignore'] = _generateGitignore();
       }
 
+      // تحقق من شجرة الملفات كاملة قبل إنشاء أي مجلد عبر SAF؛
+      // يمنع المسارات المتعارضة أو ملف بداية غير موجود من ترك مشروع جزئي.
+      ProjectFilePlanValidator.validate(
+        files: files,
+        entryFile: _actualEntryFile,
+      );
+
       final rootUri = await widget.createDirectory(
         location.uri,
         _safeProjectName,
       );
+      createdRootUri = rootUri;
 
       for (final entry in files.entries) {
-        await _writeRelativeFile(
-          rootUri,
-          entry.key,
-          entry.value,
-        );
+        await _writeRelativeFile(rootUri, entry.key, entry.value);
       }
+
+      final needsAndroidWrapper = _isFlutter ||
+          ((_selectedLanguage == 'Java' || _selectedLanguage == 'Kotlin') &&
+              _selectedTemplate == 'android');
+      if (needsAndroidWrapper) {
+        final wrapperAssets = _isFlutter
+            ? <String, String>{
+                'assets/templates/android/gradle/wrapper/gradle-wrapper.jar': 'android/gradle/wrapper/gradle-wrapper.jar',
+                'assets/templates/android/gradlew': 'android/gradlew',
+                'assets/templates/android/gradlew.bat': 'android/gradlew.bat',
+              }
+            : <String, String>{
+                'assets/templates/android/gradle/wrapper/gradle-wrapper.jar': 'gradle/wrapper/gradle-wrapper.jar',
+                'assets/templates/android/gradlew': 'gradlew',
+                'assets/templates/android/gradlew.bat': 'gradlew.bat',
+              };
+        for (final asset in wrapperAssets.entries) {
+          final data = await rootBundle.load(asset.key);
+          await _writeRelativeBytes(
+            rootUri,
+            asset.value,
+            data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes),
+          );
+        }
+      }
+
+      projectFilesCommitted = true;
 
       final project = CreatedProjectInfo(
         name: _projectName,
@@ -658,10 +689,20 @@ class _NewProjectWizardState extends State<NewProjectWizard> {
 
       Navigator.of(context).pop();
     } catch (e) {
-      _showError(
-        'فشل إنشاء المشروع: $e\n'
-        'قد يكون قد تم إنشاء بعض الملفات قبل حدوث الخطأ.',
-      );
+      var recoveryMessage =
+          'قد يكون قد تم إنشاء بعض الملفات قبل حدوث الخطأ.';
+      if (createdRootUri != null && !projectFilesCommitted) {
+        final cleanup = widget.deleteDirectoryTree;
+        if (cleanup != null) {
+          try {
+            await cleanup(createdRootUri);
+            recoveryMessage = 'تم حذف مجلد المشروع الجزئي بعد فشل الإنشاء.';
+          } catch (cleanupError) {
+            recoveryMessage = 'تعذر حذف المجلد الجزئي تلقائيًا: $cleanupError';
+          }
+        }
+      }
+      _showError('فشل إنشاء المشروع: $e\n$recoveryMessage');
     } finally {
       if (mounted) {
         setState(() {
@@ -670,6 +711,122 @@ class _NewProjectWizardState extends State<NewProjectWizard> {
       }
     }
   }
+
+  Map<String, String> _generateFlutterAndroidFiles() {
+    final appId = _packageController.text.trim();
+    final namespacePath = appId.replaceAll('.', '/');
+    return {
+      'android/settings.gradle': '''
+pluginManagement {
+    def flutterSdkPath = {
+        def properties = new Properties()
+        file("local.properties").withInputStream { properties.load(it) }
+        def flutterSdkPath = properties.getProperty("flutter.sdk")
+        assert flutterSdkPath != null, "flutter.sdk not set in local.properties"
+        return flutterSdkPath
+    }()
+    includeBuild("\${flutterSdkPath}/packages/flutter_tools/gradle")
+    repositories { google(); mavenCentral(); gradlePluginPortal() }
+}
+plugins {
+    id "dev.flutter.flutter-plugin-loader" version "1.0.0"
+    id "com.android.application" version "8.11.1" apply false
+    id "org.jetbrains.kotlin.android" version "2.2.20" apply false
+}
+include ":app"
+''',
+      'android/build.gradle': '''
+allprojects { repositories { google(); mavenCentral() } }
+rootProject.buildDir = "../build"
+subprojects { project.buildDir = "\${rootProject.buildDir}/\${project.name}" }
+subprojects { project.evaluationDependsOn(":app") }
+tasks.register("clean", Delete) { delete rootProject.buildDir }
+''',
+      'android/gradle.properties': '''
+org.gradle.jvmargs=-Xmx4G -XX:MaxMetaspaceSize=2G -XX:ReservedCodeCacheSize=512m -XX:+HeapDumpOnOutOfMemoryError
+android.useAndroidX=true
+android.enableJetifier=true
+''',
+      'android/gradle/wrapper/gradle-wrapper.properties': '''
+distributionBase=GRADLE_USER_HOME
+distributionPath=wrapper/dists
+distributionUrl=https\\://services.gradle.org/distributions/gradle-8.14-bin.zip
+networkTimeout=10000
+validateDistributionUrl=true
+zipStoreBase=GRADLE_USER_HOME
+zipStorePath=wrapper/dists
+''',
+      'android/app/build.gradle': '''
+plugins {
+    id "com.android.application"
+    id "kotlin-android"
+    id "dev.flutter.flutter-gradle-plugin"
+}
+android {
+    namespace = "$appId"
+    compileSdk = flutter.compileSdkVersion
+    ndkVersion = flutter.ndkVersion
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+    kotlinOptions { jvmTarget = "17" }
+    defaultConfig {
+        applicationId = "$appId"
+        minSdk = flutter.minSdkVersion
+        targetSdk = flutter.targetSdkVersion
+        versionCode = flutter.versionCode
+        versionName = flutter.versionName
+    }
+    buildTypes { release { signingConfig = signingConfigs.debug } }
+}
+flutter { source = "../.." }
+''',
+      'android/app/src/main/AndroidManifest.xml': '''
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET" />
+    <application android:label="${_xmlEscape(_projectName)}" android:name="${r'${applicationName}'}">
+        <activity android:name=".MainActivity" android:exported="true"
+            android:launchMode="singleTop" android:taskAffinity=""
+            android:theme="@style/LaunchTheme"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+            android:hardwareAccelerated="true" android:windowSoftInputMode="adjustResize">
+            <meta-data android:name="io.flutter.embedding.android.NormalTheme" android:resource="@style/NormalTheme" />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <meta-data android:name="flutterEmbedding" android:value="2" />
+    </application>
+</manifest>
+''',
+      'android/app/src/main/kotlin/$namespacePath/MainActivity.kt': '''
+package $appId
+
+import io.flutter.embedding.android.FlutterActivity
+
+class MainActivity : FlutterActivity()
+''',
+      'android/app/src/main/res/values/styles.xml': '''
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="LaunchTheme" parent="@android:style/Theme.Light.NoTitleBar">
+        <item name="android:windowBackground">?android:colorBackground</item>
+    </style>
+    <style name="NormalTheme" parent="@android:style/Theme.Light.NoTitleBar">
+        <item name="android:windowBackground">?android:colorBackground</item>
+    </style>
+</resources>
+''',
+    };
+  }
+
+  String _xmlEscape(String value) => value
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('"', '&quot;')
+      .replaceAll("'", '&apos;');
 
   Map<String, String> _generateProjectFiles() {
     final files = <String, String>{};
@@ -752,6 +909,101 @@ class HomePage extends StatelessWidget {
     );
   }
 }
+''';
+        // Android platform files are generated locally from a bundled template.
+        files['.github/workflows/build-android.yml'] = r'''name: Build Android APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      flutter_version:
+        description: Flutter SDK version
+        required: true
+        default: '3.47.2'
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: ${{ inputs.flutter_version || '3.47.2' }}
+          cache: true
+
+      - name: Cache Pub packages
+        uses: actions/cache@v5
+        with:
+          path: ~/.pub-cache
+          key: ${{ runner.os }}-pub-${{ hashFiles('pubspec.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pub-
+
+      - name: Cache Gradle
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('android/**/*.gradle*', 'android/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      - name: Verify local Android platform
+        run: test -f android/app/src/main/AndroidManifest.xml && test -f android/settings.gradle
+
+      - name: Ensure Internet permission
+        run: |
+          python3 - <<'PYTHON'
+          from pathlib import Path
+          manifest = Path('android/app/src/main/AndroidManifest.xml')
+          text = manifest.read_text()
+          permission = '<uses-permission android:name="android.permission.INTERNET" />'
+          if permission not in text:
+              text = text.replace('<application', permission + '\n    <application', 1)
+          manifest.write_text(text)
+          PYTHON
+
+      - name: Get dependencies
+        run: flutter pub get
+
+      - name: Analyze
+        run: flutter analyze
+
+      - name: Test
+        run: flutter test
+
+      - name: Build release APK
+        run: flutter build apk --release
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ github.event.repository.name }}-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+          retention-days: 14
+''';
+        files.addAll(_generateFlutterAndroidFiles());
+        files['.metadata'] = '''
+version:
+  revision: ''
+  channel: stable
+project_type: app
 ''';
         break;
 
@@ -1058,9 +1310,147 @@ echo "${_phpString('Hello from $_projectName!')}";
 
 ''';
         break;
+
+      case 'C#':
+        files['$_safeProjectName.csproj'] = '''
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+</Project>
+''';
+        files[entry] = '''
+Console.WriteLine("${_jsString('Hello from $_projectName!')}");
+''';
+        break;
+
+      case 'Ruby':
+        files['Gemfile'] = '''
+source 'https://rubygems.org'
+
+# Add project dependencies here.
+''';
+        files[entry] = '''
+puts ${jsonEncode('Hello from $_projectName!')}
+''';
+        break;
+
+      case 'XML':
+        files[entry] = '''
+<?xml version="1.0" encoding="UTF-8"?>
+<project name="${_htmlEscape(_projectName)}">
+  <description>${_htmlEscape(description)}</description>
+</project>
+''';
+        break;
+
+      case 'YAML':
+        files[entry] = '''
+name: ${jsonEncode(_safeProjectName)}
+version: ${jsonEncode(version)}
+description: ${jsonEncode(description)}
+''';
+        break;
     }
 
+    _appendTemplateFiles(files);
+    if (_projectMode == 'integrated') {
+      files.putIfAbsent('.vscode/settings.json', () => '''{\n  \"files.trimTrailingWhitespace\": true,\n  \"editor.insertSpaces\": true,\n  \"editor.tabSize\": 2\n}\n''');
+      files.putIfAbsent('docs/PROJECT_OVERVIEW.md', () => '# $_projectName\n\nProject overview and development notes.\n');
+      files.putIfAbsent('.editorconfig', () => 'root = true\n\n[*]\ncharset = utf-8\nend_of_line = lf\ninsert_final_newline = true\n');
+    }
     return files;
+  }
+
+  void _appendTemplateFiles(Map<String, String> files) {
+    switch (_selectedLanguage) {
+      case 'Flutter':
+        if (_selectedTemplate == 'multi_page') {
+          files['lib/main.dart'] = '''import 'package:flutter/material.dart';\nimport 'screens/home_screen.dart';\nimport 'screens/settings_screen.dart';\n\nvoid main() => runApp(const ProjectApp());\nclass ProjectApp extends StatelessWidget {\n  const ProjectApp({super.key});\n  @override Widget build(BuildContext context) => MaterialApp(\n    title: '$_projectName', initialRoute: '/', routes: {\n      '/': (_) => const HomeScreen(), '/settings': (_) => const SettingsScreen(),\n    },\n  );\n}\n''';
+          files['lib/screens/home_screen.dart'] = '''import 'package:flutter/material.dart';\n\nclass HomeScreen extends StatelessWidget {\n  const HomeScreen({super.key});\n  @override\n  Widget build(BuildContext context) => Scaffold(appBar: AppBar(title: const Text('Home')), body: const Center(child: Text('Home screen')));\n}\n''';
+          files['lib/screens/settings_screen.dart'] = '''import 'package:flutter/material.dart';\n\nclass SettingsScreen extends StatelessWidget {\n  const SettingsScreen({super.key});\n  @override\n  Widget build(BuildContext context) => Scaffold(appBar: AppBar(title: const Text('Settings')), body: const Center(child: Text('Settings screen')));\n}\n''';
+          files['lib/routes/app_routes.dart'] = '''class AppRoutes {\n  static const home = '/';\n  static const settings = '/settings';\n}\n''';
+        } else if (_selectedTemplate == 'login') {
+          files['lib/main.dart'] = '''import 'package:flutter/material.dart';\nimport 'screens/login_screen.dart';\nvoid main() => runApp(const MaterialApp(home: LoginScreen()));\n''';
+          files['lib/screens/login_screen.dart'] = '''import 'package:flutter/material.dart';\n\nclass LoginScreen extends StatelessWidget {\n  const LoginScreen({super.key});\n  @override\n  Widget build(BuildContext context) => Scaffold(body: Center(child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 360), child: const Padding(padding: EdgeInsets.all(24), child: Column(mainAxisSize: MainAxisSize.min, children: [Text('Welcome back'), TextField(decoration: InputDecoration(labelText: 'Email')), TextField(obscureText: true, decoration: InputDecoration(labelText: 'Password')), SizedBox(height: 16), FilledButton(onPressed: null, child: Text('Sign in'))])))));\n}\n''';
+          files['lib/services/auth_service.dart'] = '''abstract interface class AuthService {\n  Future<bool> signIn(String email, String password);\n}\n''';
+        } else if (_selectedTemplate == 'firebase') {
+          files['lib/firebase_options.dart'] = '''// Replace this placeholder with generated Firebase options from FlutterFire CLI.\nclass DefaultFirebaseOptions {\n  static const configured = false;\n}\n''';
+          files['FIREBASE_SETUP.md'] = 'Run `flutterfire configure`, add Firebase packages, then initialize Firebase in main.dart.\n';
+        } else if (_selectedTemplate == 'multilingual') {
+          files['pubspec.yaml'] = files['pubspec.yaml']!.replaceFirst(
+            '  uses-material-design: true',
+            '  uses-material-design: true\n  generate: true',
+          );
+          files['lib/l10n/app_en.arb'] = jsonEncode({'@@locale': 'en', 'appTitle': _projectName});
+          files['lib/l10n/app_ar.arb'] = jsonEncode({'@@locale': 'ar', 'appTitle': _projectName});
+          files['l10n.yaml'] = 'arb-dir: lib/l10n\ntemplate-arb-file: app_en.arb\noutput-localization-file: app_localizations.dart\n';
+        }
+        break;
+      case 'HTML': case 'JavaScript': case 'TypeScript': case 'CSS':
+        if (_selectedTemplate == 'multi_page') {
+          if (_selectedLanguage == 'HTML') {
+            files[entry] = '''<!doctype html>\n<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>$_projectName</title><link rel="stylesheet" href="style.css"></head><body><nav><a href="index.html">Home</a> <a href="pages/about.html">About</a> <a href="pages/contact.html">Contact</a></nav><main><h1>$_projectName</h1><p>Multi-page starter project.</p></main><script src="script.js"></script></body></html>\n''';
+          }
+          files['pages/about.html'] = '<!doctype html>\n<html lang="en"><meta charset="utf-8"><title>About</title><body><main><h1>About</h1><p>About this project.</p></main></body></html>\n';
+          files['pages/contact.html'] = '<!doctype html>\n<html lang="en"><meta charset="utf-8"><title>Contact</title><body><main><h1>Contact</h1><p>Contact information.</p></main></body></html>\n';
+          files['assets/css/pages.css'] = 'main { max-width: 960px; margin: 2rem auto; padding: 1rem; }\n';
+        } else if (_selectedTemplate == 'dashboard') {
+          if (_selectedLanguage == 'HTML') {
+            files[entry] = '''<!doctype html>\n<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>$_projectName Dashboard</title><link rel="stylesheet" href="assets/css/dashboard.css"></head><body><main id="dashboard" class="dashboard-grid"></main><script src="src/dashboard.js"></script></body></html>\n''';
+            files['src/dashboard.js'] = 'document.getElementById("dashboard").innerHTML = "<section><h1>Dashboard</h1><p>Welcome to your workspace.</p></section>";\n';
+          } else {
+            files['src/dashboard.js'] = 'export function renderDashboard(root) {\n  root.innerHTML = \"<section><h1>Dashboard</h1><p>Welcome to your workspace.</p></section>\";\n}\n';
+          }
+          files['assets/css/dashboard.css'] = '.dashboard-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem; }\n';
+        }
+        break;
+      case 'Python':
+        if (_selectedTemplate == 'cli') {
+          files[entry] = '''from src.commands import build_parser\n\ndef main():\n    args = build_parser().parse_args()\n    if args.version:\n        print("$_projectName 1.0.0")\n    else:\n        print("Hello from $_projectName!")\n\nif __name__ == "__main__":\n    main()\n''';
+          files['src/commands.py'] = 'import argparse\n\ndef build_parser():\n    parser = argparse.ArgumentParser(description=${jsonEncode(_projectName)})\n    parser.add_argument("--version", action="store_true")\n    return parser\n';
+          files['tests/test_commands.py'] = 'from src.commands import build_parser\n\ndef test_parser_accepts_version():\n    assert build_parser().parse_args(["--version"]).version is True\n';
+        } else if (_selectedTemplate == 'flask') {
+          files[entry] = 'from app import app\n\nif __name__ == "__main__":\n    app.run(debug=True)\n';
+          files['requirements.txt'] = 'Flask>=3.0,<4.0\n';
+          files['app.py'] = 'from flask import Flask, jsonify\n\napp = Flask(__name__)\n\n@app.get("/")\ndef index():\n    return jsonify(message="Hello from $_projectName")\n\nif __name__ == "__main__":\n    app.run(debug=True)\n';
+        } else if (_selectedTemplate == 'fastapi') {
+          files[entry] = 'import uvicorn\nfrom app.main import app\n\nif __name__ == "__main__":\n    uvicorn.run(app, host="127.0.0.1", port=8000)\n';
+          files['requirements.txt'] = 'fastapi>=0.110,<1.0\nuvicorn[standard]>=0.27,<1.0\n';
+          files['app/main.py'] = 'from fastapi import FastAPI\n\napp = FastAPI(title=${jsonEncode(_projectName)})\n\n@app.get("/")\ndef read_root():\n    return {"message": "Hello from $_projectName"}\n';
+        }
+        break;
+      case 'Java': case 'Kotlin':
+        if (_selectedTemplate == 'multi_file') {
+          final isJava = _selectedLanguage == 'Java';
+          final packageName = _packageController.text.trim();
+          final sourcePrefix = isJava ? 'src/${packageName.replaceAll('.', '/')}/' : 'src/';
+          files['${sourcePrefix}AppConfig.${isJava ? 'java' : 'kt'}'] = isJava
+              ? 'package $packageName;\n\npublic final class AppConfig {\n    public static final String APP_NAME = "${_javaString(_projectName)}";\n    private AppConfig() {}\n}\n'
+              : 'object AppConfig {\n    const val APP_NAME = "${_kotlinString(_projectName)}"\n}\n';
+          files['${sourcePrefix}GreetingService.${isJava ? 'java' : 'kt'}'] = isJava
+              ? 'package $packageName;\n\npublic class GreetingService {\n    public String greeting() { return "Hello from ${_javaString(_projectName)}!"; }\n}\n'
+              : 'class GreetingService {\n    fun greeting() = "Hello from ${_kotlinString(_projectName)}!"\n}\n';
+        } else if (_selectedTemplate == 'android') {
+          final isJava = _selectedLanguage == 'Java';
+          final appId = _packageController.text.trim();
+          final packagePath = appId.replaceAll('.', '/');
+          files['settings.gradle'] = '''pluginManagement {\n    repositories { google(); mavenCentral(); gradlePluginPortal() }\n}\ndependencyResolutionManagement { repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS); repositories { google(); mavenCentral() } }\nrootProject.name = "$_safeProjectName"\ninclude ':app'\n''';
+          files['build.gradle'] = '''plugins {\n    id 'com.android.application' version '8.7.3' apply false\n}\n''';
+          files['gradle.properties'] = 'org.gradle.jvmargs=-Xmx2G\nandroid.useAndroidX=true\n';
+          files['gradle/wrapper/gradle-wrapper.properties'] = 'distributionBase=GRADLE_USER_HOME\ndistributionPath=wrapper/dists\ndistributionUrl=https\\://services.gradle.org/distributions/gradle-8.9-bin.zip\nzipStoreBase=GRADLE_USER_HOME\nzipStorePath=wrapper/dists\n';
+          files['app/build.gradle'] = '''plugins { id 'com.android.application' }\n\nandroid {\n    namespace '$appId'\n    compileSdk 35\n    defaultConfig { applicationId '$appId'; minSdk 23; targetSdk 35; versionCode 1; versionName '$version' }\n}\n''';
+          files['app/src/main/AndroidManifest.xml'] = '''<manifest xmlns:android="http://schemas.android.com/apk/res/android"><application android:label="${_xmlEscape(_projectName)}" android:theme="@android:style/Theme.Material.Light.NoActionBar"><activity android:name=".MainActivity" android:exported="true"><intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter></activity></application></manifest>\n''';
+          files['app/src/main/java/$packagePath/MainActivity.${isJava ? 'java' : 'kt'}'] = isJava
+              ? '''package $appId;\n\nimport android.app.Activity;\nimport android.os.Bundle;\nimport android.widget.TextView;\n\npublic class MainActivity extends Activity {\n    @Override public void onCreate(Bundle state) {\n        super.onCreate(state);\n        TextView view = new TextView(this);\n        view.setText("Welcome to ${_javaString(_projectName)}");\n        view.setTextSize(22);\n        setContentView(view);\n    }\n}\n'''
+              : '''package $appId\n\nimport android.app.Activity\nimport android.os.Bundle\nimport android.widget.TextView\n\nclass MainActivity : Activity() {\n    override fun onCreate(state: Bundle?) {\n        super.onCreate(state)\n        val view = TextView(this).apply { text = "Welcome to ${_kotlinString(_projectName)}"; textSize = 22f }\n        setContentView(view)\n    }\n}\n''';
+          files['README_ANDROID.md'] = 'Native Android starter generated with Gradle and a real Activity entry point. Open the project root in Android Studio or build with a compatible Android SDK.\n';
+        }
+        break;
+    }
   }
 
   String _yamlString(String value) {
@@ -1203,12 +1593,10 @@ $packageInfo
 ${_isFlutter ? '''
 ## Flutter note
 
-This project contains Flutter source files and configuration only.
-
-The Android and iOS native platform scaffolding has not been generated.
-
-A Flutter SDK and the `flutter create` command are required to generate
-the complete native project structure.
+This project includes its Flutter source and a locally generated Android platform
+with Gradle wrapper files. The GitHub Actions workflow at
+`.github/workflows/build-android.yml` verifies the Android files, analyzes, tests,
+and builds a release APK.
 ''' : ''}
 
 ## Getting started
@@ -1220,6 +1608,17 @@ Open the project files in your preferred development environment.
   String _generateGitignore() {
     switch (_selectedLanguage) {
       case 'Flutter':
+        return '''
+.dart_tool/
+.packages
+.pub-cache/
+.pub/
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+android/.gradle/
+android/local.properties
+''';
       case 'Dart':
         return '''
 .dart_tool/
@@ -1285,6 +1684,20 @@ build/
         return '''
 /vendor/
 /.env
+''';
+      case 'C#':
+        return '''
+bin/
+obj/
+.vs/
+*.user
+''';
+      case 'Ruby':
+        return '''
+.bundle/
+vendor/bundle/
+*.gem
+.env
 ''';
 
       default:
@@ -1488,12 +1901,7 @@ Thumbs.db
                 ),
                 child: Row(
                   children: [
-                    Icon(
-                      _languageIcon(language),
-                      color: selected
-                          ? Theme.of(context).colorScheme.primary
-                          : null,
-                    ),
+                    LanguageBrandBadge(language: language, size: 44),
                     const SizedBox(width: 12),
                     Expanded(
                       child: Text(
@@ -1550,6 +1958,44 @@ Thumbs.db
       title: 'إعدادات $_selectedLanguage',
       subtitle: 'هذه القيم ستُستخدم عند إنشاء ملفات المشروع.',
       children: [
+        Row(children: [
+          LanguageBrandBadge(language: _selectedLanguage, size: 48),
+          const SizedBox(width: 12),
+          Expanded(child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(_selectedLanguage,
+                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+              Text(LanguageIdentity.of(_selectedLanguage).family,
+                style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant, fontSize: 12)),
+            ],
+          )),
+        ]),
+        const SizedBox(height: 14),
+        Text('نوع المشروع', style: Theme.of(context).textTheme.titleSmall),
+        const SizedBox(height: 6),
+        SegmentedButton<String>(
+          segments: const [
+            ButtonSegment(value: 'basic', label: Text('أساسي'), icon: Icon(Icons.bolt_outlined)),
+            ButtonSegment(value: 'integrated', label: Text('متكامل'), icon: Icon(Icons.layers_outlined)),
+          ],
+          selected: {_projectMode},
+          onSelectionChanged: (values) => setState(() => _projectMode = values.first),
+        ),
+        const SizedBox(height: 14),
+        DropdownButtonFormField<String>(
+          value: _selectedTemplate,
+          decoration: const InputDecoration(labelText: 'قالب المشروع', border: OutlineInputBorder()),
+          items: _availableTemplates.map((value) => DropdownMenuItem(value: value, child: Text(_templateLabel(value)))).toList(),
+          onChanged: (value) => setState(() {
+            _selectedTemplate = value ?? 'basic';
+            if (_selectedLanguage == 'Kotlin') {
+              _entryController.text = _selectedTemplate == 'android'
+                  ? _actualEntryFile : _defaultEntryFile;
+            }
+          }),
+        ),
+        const SizedBox(height: 14),
         if (_selectedLanguage == 'Java')
           _infoCard(
             'سيتم إنشاء ملف البداية تلقائيًا وفق اسم الحزمة:\n'
@@ -1581,9 +2027,14 @@ Thumbs.db
         ],
         if (_selectedLanguage == 'Flutter') ...[
           const SizedBox(height: 14),
+          _field(
+            controller: _packageController,
+            label: 'معرّف تطبيق Android (Application ID)',
+            hint: 'com.example.my_app',
+            icon: Icons.android,
+          ),
           _infoCard(
-            'مشروع Flutter هنا يولّد ملفات المصدر وpubspec.yaml فقط. '
-            'لن يتم إنشاء مجلدات Android وiOS الأصلية دون Flutter SDK.',
+            'سيتم إنشاء مجلد android وملفات Gradle وMainActivity وGradle Wrapper محليًا تلقائيًا عند إنشاء المشروع.',
           ),
         ],
         if (_selectedLanguage == 'Python') ...[
@@ -1671,6 +2122,8 @@ Thumbs.db
           'اسم المشروع: $_projectName\n'
           'اسم المجلد: $_safeProjectName\n'
           'اللغة: $_selectedLanguage\n'
+          'النوع: ${_projectMode == 'integrated' ? 'متكامل' : 'أساسي'}\n'
+          'القالب: ${_templateLabel(_selectedTemplate)}\n'
           'ملف البداية: $_actualEntryFile',
         ),
         const SizedBox(height: 14),

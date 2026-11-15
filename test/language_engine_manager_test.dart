@@ -60,6 +60,11 @@ void main() {
         'header.h': 'C',
         'view.xhtml': 'XML',
         'notes.mdown': 'Markdown',
+        'Program.cs': 'C#',
+        'script.rb': 'Ruby',
+        'settings.toml': 'TOML',
+        'schema.graphql': 'GraphQL',
+        'deploy.ps1': 'PowerShell',
       };
       for (final entry in expected.entries) {
         expect(LanguageEngineManager.languageForFile(entry.key), entry.value,

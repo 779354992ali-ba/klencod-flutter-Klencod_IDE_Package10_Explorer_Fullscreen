@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:markdown/markdown.dart' as markdown;
 import 'package:xml/xml.dart';
@@ -275,6 +276,20 @@ pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#080d19;padding:14px;
 ''';
   }
 
+  Future<void> _copyLogs() async {
+    if (_logs.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('لا توجد مخرجات لنسخها')),
+      );
+      return;
+    }
+    await Clipboard.setData(ClipboardData(text: _logs.join('\n')));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('تم نسخ مخرجات JavaScript')),
+    );
+  }
+
   Future<void> _loadCode() async {
     if (!mounted) return;
     setState(() {
@@ -370,9 +385,14 @@ pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#080d19;padding:14px;
                       const Spacer(),
                       IconButton(
                         visualDensity: VisualDensity.compact,
-                        onPressed: () {
-                          setState(_logs.clear);
-                        },
+                        tooltip: 'نسخ المخرجات',
+                        onPressed: _copyLogs,
+                        icon: const Icon(Icons.copy, size: 18, color: Colors.white70),
+                      ),
+                      IconButton(
+                        visualDensity: VisualDensity.compact,
+                        tooltip: 'مسح المخرجات',
+                        onPressed: () => setState(_logs.clear),
                         icon: const Icon(
                           Icons.delete_outline,
                           size: 19,

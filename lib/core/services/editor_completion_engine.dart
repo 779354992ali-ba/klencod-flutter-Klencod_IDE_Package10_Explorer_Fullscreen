@@ -26,7 +26,11 @@ class EditorCompletionEngine {
   }) {
     final all = <String>[];
     final seen = <String>{};
-    for (final item in [...? _keywords[language], ...snippets]) {
+    // Contextual snippets and project identifiers are supplied by the caller
+    // for the current file. Keep them ahead of generic language keywords so
+    // equally relevant, actionable completions (for example console.log())
+    // are not buried under broad keywords (for example const).
+    for (final item in [...snippets, ...?_keywords[language]]) {
       final value = item.trimLeft();
       if (value.isNotEmpty && seen.add(value.toLowerCase())) all.add(value);
     }
@@ -47,8 +51,12 @@ class EditorCompletionEngine {
         scored.add((value: value, score: 1, order: i));
       } else if (index > 0) {
         scored.add((value: value, score: 2, order: i));
-      } else if (_isSubsequence(needle, lower)) {
+      } else if (_matchesWordInitials(needle, value)) {
+        // Match concise forms such as `cl` -> `createLayout` or
+        // `sl` -> `StatefulWidget` without promoting arbitrary fuzzy hits.
         scored.add((value: value, score: 3, order: i));
+      } else if (_isSubsequence(needle, lower)) {
+        scored.add((value: value, score: 4, order: i));
       }
     }
     scored.sort((a, b) {
@@ -192,6 +200,31 @@ class EditorCompletionEngine {
   static bool _isWordBoundary(String value, int index) {
     final previous = value[index - 1];
     return !_identifierPart.hasMatch(previous);
+  }
+
+  /// Matches an abbreviation against identifier word starts.
+  ///
+  /// Word starts include the first character, transitions from lowercase to
+  /// uppercase, and characters after underscores, hyphens, or whitespace.
+  /// This keeps completion useful for camelCase and snake_case identifiers.
+  static bool _matchesWordInitials(String needle, String value) {
+    if (needle.isEmpty || value.isEmpty) return false;
+    final initials = <String>[];
+    for (var i = 0; i < value.length; i++) {
+      final current = value[i];
+      if (!_identifierPart.hasMatch(current)) continue;
+      if (i == 0 ||
+          value[i - 1] == '_' ||
+          value[i - 1] == '-' ||
+          (current.toUpperCase() == current &&
+              current.toLowerCase() != current &&
+              _identifierPart.hasMatch(value[i - 1]) &&
+              value[i - 1].toLowerCase() == value[i - 1])) {
+        initials.add(current.toLowerCase());
+      }
+    }
+    final abbreviation = initials.join();
+    return abbreviation.startsWith(needle.toLowerCase());
   }
 
   static bool _isSubsequence(String needle, String value) {

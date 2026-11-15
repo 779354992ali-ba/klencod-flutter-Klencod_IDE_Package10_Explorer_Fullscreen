@@ -3,10 +3,13 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
 import 'core/services/saf_file_service.dart';
+import 'core/services/preview_project_guard.dart';
+
 
 class HtmlPreviewScreen extends StatefulWidget {
   final String htmlCode;
@@ -44,6 +47,9 @@ class _HtmlPreviewScreenState extends State<HtmlPreviewScreen> {
   Timer? _previewUpdateTimer;
   int _htmlUpdateGeneration = 0;
   Future<void> _htmlUpdateQueue = Future<void>.value();
+
+  // Prevent a recursive SAF copy from exhausting device memory/storage.
+  PreviewProjectGuard _previewGuard = PreviewProjectGuard();
 
   @override
   void didUpdateWidget(covariant HtmlPreviewScreen oldWidget) {
@@ -208,85 +214,90 @@ class _HtmlPreviewScreenState extends State<HtmlPreviewScreen> {
   //
   // يتم الاحتفاظ بالهيكل الأصلي للمجلدات.
   // وتتم إعادة المسار النسبي لملف HTML المطلوب.
+  // مقارنة URI الخاص بمستند SAF بصورة مرنة؛ بعض مزودي الملفات
+  // يعيدون تمثيلات URI بترميز مختلف للمستند نفسه.
+  bool _sameDocumentUri(String first, String second) {
+    final a = first.trim();
+    final b = second.trim();
+    if (a == b) return true;
+    try {
+      return Uri.decodeFull(a) == Uri.decodeFull(b);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  // نسخ ملفات المشروع من SAF إلى المجلد المؤقت مع الاحتفاظ بالمسارات.
+  // يتم تسجيل مسار ملف HTML قبل محاولة القراءة حتى لا نخلط بين
+  // "الملف غير موجود" و"الملف موجود لكن تعذرت قراءته".
   Future<String?> _copyProjectDirectory({
     required String sourceUri,
     required String destinationPath,
     required String htmlFileUri,
     String relativePath = '',
+    int depth = 0,
   }) async {
-    final items = await _safFiles.listDirectory(
-      sourceUri,
-    );
+    _previewGuard.checkDepth(depth);
 
+    final items = await _safFiles.listDirectory(sourceUri);
     String? htmlRelativePath;
 
     for (final item in items) {
-      final name = item.name;
+      _previewGuard.registerEntry();
 
+      final name = item.name;
       if (name.isEmpty ||
           name == '.' ||
           name == '..' ||
           name.contains('/') ||
-          name.contains('\\')) {
+          name.contains(r'\')) {
         continue;
       }
 
-      final currentRelativePath = relativePath.isEmpty
-          ? name
-          : '$relativePath/$name';
-
-      final destinationItemPath = _joinPath(
-        destinationPath,
-        name,
-      );
+      final currentRelativePath =
+          relativePath.isEmpty ? name : '$relativePath/$name';
+      final destinationItemPath = _joinPath(destinationPath, name);
 
       if (item.isDir) {
-        final directory = Directory(
-          destinationItemPath,
-        );
-
-        await directory.create(
-          recursive: true,
-        );
-
-        final nestedHtmlPath =
-            await _copyProjectDirectory(
+        final directory = Directory(destinationItemPath);
+        await directory.create(recursive: true);
+        final nestedHtmlPath = await _copyProjectDirectory(
           sourceUri: item.uri,
           destinationPath: destinationItemPath,
           htmlFileUri: htmlFileUri,
           relativePath: currentRelativePath,
+          depth: depth + 1,
         );
+        if (nestedHtmlPath != null) htmlRelativePath = nestedHtmlPath;
+        continue;
+      }
 
-        if (nestedHtmlPath != null) {
-          htmlRelativePath = nestedHtmlPath;
-        }
-      } else {
-        try {
-          final bytes = await _safFiles.readFile(
-            item.uri,
-          );
+      final isTargetHtml = _sameDocumentUri(item.uri, htmlFileUri);
+      if (isTargetHtml) {
+        htmlRelativePath = currentRelativePath;
+      }
 
-          final outputFile = File(
-            destinationItemPath,
-          );
-
-          await outputFile.parent.create(
-            recursive: true,
-          );
-
-          await outputFile.writeAsBytes(
-            bytes,
-            flush: true,
-          );
-
-          if (item.uri == htmlFileUri) {
-            htmlRelativePath = currentRelativePath;
-          }
-        } catch (e) {
-          debugPrint(
-            'تعذرت قراءة الملف $name: $e',
+      try {
+        final bytes = await _safFiles.readFile(item.uri);
+        _previewGuard.registerFileBytes(bytes.length);
+        final outputFile = File(destinationItemPath);
+        await outputFile.parent.create(recursive: true);
+        await outputFile.writeAsBytes(bytes, flush: true);
+      } catch (error) {
+        if (error is StateError) {
+          throw Exception(
+            'توقفت المعاينة لحماية الجهاز: ${error.message}',
           );
         }
+        debugPrint('تعذرت قراءة مورد المشروع "$currentRelativePath": $error');
+        if (isTargetHtml) {
+          throw Exception(
+            'تم العثور على ملف HTML "$name"، لكن تعذرت قراءته من مساحة التخزين. '
+            'أعد اختيار مجلد المشروع وامنح Bisho IDE صلاحية الوصول إليه. '
+            'تفاصيل النظام: $error',
+          );
+        }
+        // فشل مورد فرعي لا يمنع معاينة الصفحة؛ سيظهر خطأ المورد في Console.
       }
     }
 
@@ -481,6 +492,21 @@ class _HtmlPreviewScreenState extends State<HtmlPreviewScreen> {
     return _logs;
   }
 
+  Future<void> _copyVisibleLogs() async {
+    final lines = _visibleLogs;
+    if (lines.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('لا توجد مخرجات ظاهرة لنسخها')),
+      );
+      return;
+    }
+    await Clipboard.setData(ClipboardData(text: lines.join('\n')));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('تم نسخ مخرجات وحدة التحكم')),
+    );
+  }
+
   // تجهيز المشروع وفتح ملف HTML.
   Future<void> _loadPage() async {
     try {
@@ -513,6 +539,8 @@ class _HtmlPreviewScreenState extends State<HtmlPreviewScreen> {
 
       _previewDirectory = previewDirectory;
 
+      _previewGuard = PreviewProjectGuard();
+
       final htmlRelativePath =
           await _copyProjectDirectory(
         sourceUri: widget.projectUri!,
@@ -522,8 +550,9 @@ class _HtmlPreviewScreenState extends State<HtmlPreviewScreen> {
 
       if (htmlRelativePath == null) {
         throw Exception(
-          'لم يتم العثور على ملف HTML داخل مجلد المشروع. '
-          'تأكد من أن الملف موجود وأن صلاحية الوصول إلى المجلد محفوظة.',
+          'لم يظهر ملف HTML المحدد أثناء قراءة محتويات مجلد المشروع. '
+          'تأكد من اختيار المجلد الأب الصحيح، ثم افتح ملف HTML من مستكشف المشروع '
+          'وأعد المحاولة. إذا كان الملف داخل مجلد فرعي فاحتفظ ببنية المجلدات كما هي.',
         );
       }
 
@@ -803,6 +832,12 @@ class _HtmlPreviewScreenState extends State<HtmlPreviewScreen> {
                           PopupMenuItem(value: 'warnings', child: Text('التحذيرات فقط')),
                         ],
                         icon: const Icon(Icons.filter_list, color: Colors.white70, size: 19),
+                      ),
+                      IconButton(
+                        visualDensity: VisualDensity.compact,
+                        tooltip: 'نسخ المخرجات الظاهرة',
+                        onPressed: _copyVisibleLogs,
+                        icon: const Icon(Icons.copy, color: Colors.white70, size: 18),
                       ),
                       IconButton(
                         visualDensity: VisualDensity.compact,
