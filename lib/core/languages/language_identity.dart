@@ -135,9 +135,9 @@ class LanguageBrandBadge extends StatelessWidget {
       width: size, height: size,
       alignment: Alignment.center,
       decoration: BoxDecoration(
-        color: identity.color.withOpacity(.16),
+        color: identity.color.withValues(alpha: .16),
         borderRadius: BorderRadius.circular(size * .28),
-        border: Border.all(color: identity.color.withOpacity(.55)),
+        border: Border.all(color: identity.color.withValues(alpha: .55)),
       ),
       child: Text(
         identity.mark,

@@ -36,7 +36,7 @@ class FlutterPreviewScreen extends StatefulWidget {
 
 class _FlutterPreviewScreenState extends State<FlutterPreviewScreen> {
   static const _background = Color(0xFF0B1020);
-  static const _panel = Color(0xFF111B30);
+  static const _panelColor = Color(0xFF111B30);
   static const _cyan = Color(0xFF38BDF8);
   static const _muted = Color(0xFF94A3B8);
 
@@ -680,7 +680,7 @@ class _FlutterPreviewScreenState extends State<FlutterPreviewScreen> {
     width: double.infinity,
     padding: const EdgeInsets.all(14),
     decoration: BoxDecoration(
-      color: _panel,
+      color: _panelColor,
       borderRadius: BorderRadius.circular(18),
       border: Border.all(color: const Color(0xFF26334D)),
       boxShadow: const [

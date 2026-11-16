@@ -35,6 +35,7 @@ import 'package:saf/saf.dart';
 import 'package:xml/xml.dart';
 import 'package:yaml/yaml.dart';
 
+import 'core/theme/bisho_theme.dart';
 import 'core/services/saf_file_service.dart';
 import 'core/languages/language_identity.dart';
 import 'core/services/project_archive_validator.dart';
@@ -57,8 +58,9 @@ import 'core/services/project_backup_repository.dart';
 import 'core/services/project_text_diff.dart';
 import 'features/terminal/bisho_terminal_panel.dart';
 
-void main() {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await BishoThemeController.load();
   runApp(const BishoIDE());
 }
 
@@ -67,23 +69,71 @@ class BishoIDE extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Bisho IDE',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        brightness: Brightness.dark,
-        useMaterial3: true,
-        scaffoldBackgroundColor: const Color(0xFF0B1020),
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF38BDF8),
-          brightness: Brightness.dark,
+    return ValueListenableBuilder<ThemeMode>(
+      valueListenable: BishoThemeController.mode,
+      builder: (context, mode, _) => MaterialApp(
+        title: 'Bisho IDE',
+        debugShowCheckedModeBanner: false,
+        theme: BishoTheme.lightTheme,
+        darkTheme: BishoTheme.darkTheme,
+        themeMode: mode,
+        home: Theme(
+          data: BishoTheme.darkTheme,
+          child: const _BishoSplashGate(),
         ),
       ),
-      home: const _BishoSplashGate(),
     );
   }
 }
 
+/// Page route that keeps the code workspace (previews, runners, fullscreen
+/// editor) on the dark theme, which those screens are hand-styled for.
+class _DarkPageRoute<T> extends MaterialPageRoute<T> {
+  _DarkPageRoute({
+    required super.builder,
+    super.settings,
+    super.maintainState,
+    super.fullscreenDialog,
+  });
+
+  @override
+  Widget buildContent(BuildContext context) =>
+      Theme(data: BishoTheme.darkTheme, child: super.buildContent(context));
+}
+
+
+/// Computes the 1-based line and column for [offset] without allocating a
+/// substring or running a regex over the text on every rebuild.
+(int, int) _cursorLineColumn(String text, int offset) {
+  final end = offset.clamp(0, text.length).toInt();
+  var line = 1;
+  var lastBreak = -1;
+  for (var i = 0; i < end; i++) {
+    if (text.codeUnitAt(i) == 0x0A) {
+      line++;
+      lastBreak = i;
+    }
+  }
+  return (line, end - lastBreak);
+}
+
+PopupMenuItem<String> _bishoMenuItem(
+  String value,
+  IconData icon,
+  String label, {
+  Color color = const Color(0xFF38BDF8),
+}) {
+  return PopupMenuItem<String>(
+    value: value,
+    child: Row(
+      children: [
+        Icon(icon, size: 20, color: color),
+        const SizedBox(width: 12),
+        Expanded(child: Text(label, overflow: TextOverflow.ellipsis)),
+      ],
+    ),
+  );
+}
 
 class _BishoSplashGate extends StatefulWidget {
   const _BishoSplashGate({super.key});
@@ -445,7 +495,16 @@ class _EditorScreenState extends State<EditorScreen> with WidgetsBindingObserver
 
       if (textChanged) {
         history.add(controller.text);
-        if (history.length > 101) history.removeAt(0);
+        // Bound undo memory by entry count and total characters so large
+        // files do not keep ~100 full copies of themselves alive.
+        var historyChars = 0;
+        for (final entry in history) {
+          historyChars += entry.length;
+        }
+        while (history.length > 101 ||
+            (history.length > 2 && historyChars > 4000000)) {
+          historyChars -= history.removeAt(0).length;
+        }
         _redoHistory.putIfAbsent(tab.id, () => <String>[]).clear();
       }
       if (!mounted || isRestoring) return;
@@ -2470,7 +2529,7 @@ class _EditorScreenState extends State<EditorScreen> with WidgetsBindingObserver
                     leading: const Icon(Icons.restore_rounded),
                     title: Text(item.createdAt.toLocal().toString(), maxLines: 1, overflow: TextOverflow.ellipsis),
                     subtitle: Text('${item.fileCount} ملف · ${item.directoryCount} مجلد · ${(item.totalBytes / 1048576).toStringAsFixed(2)} MB'),
-                    trailing: Wrap(mainAxisSize: MainAxisSize.min, children: [
+                    trailing: Wrap(children: [
                       IconButton(
                         tooltip: 'استعادة هذه النقطة', icon: const Icon(Icons.settings_backup_restore_rounded),
                         onPressed: () => Navigator.pop(dialogContext, {'action': 'restore', 'snapshot': item}),
@@ -3777,7 +3836,7 @@ class _EditorScreenState extends State<EditorScreen> with WidgetsBindingObserver
   void openFlutterPreview() {
     Navigator.push(
       context,
-      MaterialPageRoute(
+      _DarkPageRoute(
         builder: (_) => FlutterPreviewScreen(
           projectName: projectName,
           projectUri: projectUri,
@@ -3837,7 +3896,7 @@ class _EditorScreenState extends State<EditorScreen> with WidgetsBindingObserver
         if (!mounted) return;
         await Navigator.push(
           context,
-          MaterialPageRoute(
+          _DarkPageRoute(
             builder: (_) => HtmlPreviewScreen(
               htmlCode: tab.controller.text,
               projectUri: projectUri,
@@ -3858,7 +3917,7 @@ class _EditorScreenState extends State<EditorScreen> with WidgetsBindingObserver
 
         await Navigator.push(
           context,
-          MaterialPageRoute(
+          _DarkPageRoute(
             builder: (_) => WebCodeRunnerScreen(
               code: tab.controller.text,
               fileName: tab.fileName,
@@ -3871,7 +3930,7 @@ class _EditorScreenState extends State<EditorScreen> with WidgetsBindingObserver
       case LanguageEngine.jsonViewer:
         await Navigator.push(
           context,
-          MaterialPageRoute(
+          _DarkPageRoute(
             builder: (_) => WebCodeRunnerScreen(
               code: tab.controller.text,
               fileName: tab.fileName,
@@ -3893,7 +3952,6 @@ class _EditorScreenState extends State<EditorScreen> with WidgetsBindingObserver
     showDialog<void>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        backgroundColor: const Color(0xFF111B30),
         title: Row(children: [
           const Icon(Icons.info_outline_rounded, color: Color(0xFF38BDF8)),
           const SizedBox(width: 8),
@@ -4419,7 +4477,7 @@ class _EditorScreenState extends State<EditorScreen> with WidgetsBindingObserver
       if (!mounted) return;
       Navigator.of(context)
           .push(
-            MaterialPageRoute<void>(
+            _DarkPageRoute<void>(
               builder: (_) => EditorFullScreenScreen(
                 tab: activeTab,
                 fontSize: _editorFontSize,
@@ -4457,7 +4515,6 @@ class _EditorScreenState extends State<EditorScreen> with WidgetsBindingObserver
   Widget build(BuildContext context) {
     if (tabs.isEmpty) {
       return Scaffold(
-        backgroundColor: const Color(0xFF0B1020),
         body: Center(
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -4466,7 +4523,7 @@ class _EditorScreenState extends State<EditorScreen> with WidgetsBindingObserver
               const SizedBox(height: 14),
               Text(
                 isRestoring ? 'جاري استعادة مساحة العمل...' : 'جاري تجهيز المحرر...',
-                style: const TextStyle(color: Colors.white70),
+                style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant),
               ),
             ],
           ),
@@ -4488,10 +4545,9 @@ class _EditorScreenState extends State<EditorScreen> with WidgetsBindingObserver
     final cursorOffset = selection.isValid
         ? selection.extentOffset.clamp(0, tab.controller.text.length).toInt()
         : tab.controller.text.length;
-    final textBeforeCursor = tab.controller.text.substring(0, cursorOffset);
-    final cursorLine = '\n'.allMatches(textBeforeCursor).length + 1;
-    final lastLineBreak = textBeforeCursor.lastIndexOf('\n');
-    final cursorColumn = textBeforeCursor.length - lastLineBreak;
+    final cursorPosition = _cursorLineColumn(tab.controller.text, cursorOffset);
+    final cursorLine = cursorPosition.$1;
+    final cursorColumn = cursorPosition.$2;
 
     return PopScope<Object?>(
       canPop: false,
@@ -4506,10 +4562,12 @@ class _EditorScreenState extends State<EditorScreen> with WidgetsBindingObserver
             : Drawer(
                 width: 320,
                 backgroundColor: const Color(0xFF111827),
-                child: SafeArea(child: buildExplorer()),
+                child: Theme(
+                  data: BishoTheme.darkTheme,
+                  child: SafeArea(child: buildExplorer()),
+                ),
               ),
         appBar: _editorFullScreen ? null : AppBar(
-          backgroundColor: const Color(0xFF151C30),
           title: const Row(
             children: [
               Icon(
@@ -4539,6 +4597,15 @@ class _EditorScreenState extends State<EditorScreen> with WidgetsBindingObserver
               icon: const Icon(Icons.terminal, color: Color(0xFF38BDF8)),
               tooltip: 'فتح الطرفية',
             ),
+            IconButton(
+              onPressed: BishoThemeController.toggle,
+              icon: Icon(
+                Theme.of(context).brightness == Brightness.dark
+                    ? Icons.light_mode_rounded
+                    : Icons.dark_mode_rounded,
+              ),
+              tooltip: 'تبديل الثيم (فاتح/داكن)',
+            ),
             PopupMenuButton<String>(
               onSelected: (value) {
                 if (value == 'new') createNewTab();
@@ -4555,82 +4622,23 @@ class _EditorScreenState extends State<EditorScreen> with WidgetsBindingObserver
                 if (value == 'complete') showCodeCompletions();
                 if (value == 'exit') _confirmApplicationExit();
               },
-              itemBuilder: (context) => const [
-                PopupMenuItem(
-                  value: 'new',
-                  child: Text('ملف جديد'),
-                ),
-                PopupMenuItem(
-                  value: 'new_project',
-                  child: Row(
-                    children: [
-                      Icon(
-                        Icons.create_new_folder,
-                        size: 18,
-                        color: Color(0xFF38BDF8),
-                      ),
-                      SizedBox(width: 8),
-                      Text('إنشاء مشروع جديد'),
-                    ],
-                  ),
-                ),
-                PopupMenuItem(
-                  value: 'open',
-                  child: Text('فتح ملف'),
-                ),
-                PopupMenuItem(
-                  value: 'folder',
-                  child: Text('فتح مجلد مشروع'),
-                ),
-                PopupMenuItem(
-                  value: 'export',
-                  child: Text('تصدير الملف'),
-                ),
-                PopupMenuItem(
-                  value: 'export_project',
-                  child: Text('تصدير المشروع ZIP كاملاً'),
-                ),
-                PopupMenuItem(
-                  value: 'import_zip',
-                  child: Text('استيراد مشروع ZIP'),
-                ),
-                PopupMenuItem(
-                  value: 'search',
-                  child: Text('بحث'),
-                ),
-                PopupMenuItem(
-                  value: 'copy',
-                  child: Text('نسخ الكود'),
-                ),
-                PopupMenuItem(
-                  value: 'complete',
-                  child: Text('الإكمال التلقائي'),
-                ),
-                PopupMenuItem(
-                  value: 'saveall',
-                  child: Text('حفظ جميع الملفات'),
-                ),
-                PopupMenuItem(
-                  value: 'terminal',
-                  child: Row(
-                    children: [
-                      Icon(Icons.terminal, size: 18, color: Color(0xFF38BDF8)),
-                      SizedBox(width: 8),
-                      Text('فتح الطرفية'),
-                    ],
-                  ),
-                ),
-                PopupMenuDivider(),
-                PopupMenuItem(
-                  value: 'exit',
-                  child: Row(
-                    children: [
-                      Icon(Icons.exit_to_app_rounded, size: 18, color: Colors.orangeAccent),
-                      SizedBox(width: 8),
-                      Text('الخروج من التطبيق'),
-                    ],
-                  ),
-                ),
+              itemBuilder: (context) => [
+                _bishoMenuItem('new', Icons.note_add_rounded, 'ملف جديد'),
+                _bishoMenuItem('new_project', Icons.create_new_folder_rounded, 'إنشاء مشروع جديد'),
+                _bishoMenuItem('open', Icons.file_open_rounded, 'فتح ملف'),
+                _bishoMenuItem('folder', Icons.folder_open_rounded, 'فتح مجلد مشروع'),
+                const PopupMenuDivider(),
+                _bishoMenuItem('export', Icons.download_rounded, 'تصدير الملف'),
+                _bishoMenuItem('export_project', Icons.archive_rounded, 'تصدير المشروع ZIP كاملاً'),
+                _bishoMenuItem('import_zip', Icons.unarchive_rounded, 'استيراد مشروع ZIP'),
+                const PopupMenuDivider(),
+                _bishoMenuItem('search', Icons.search_rounded, 'بحث'),
+                _bishoMenuItem('copy', Icons.copy_rounded, 'نسخ الكود'),
+                _bishoMenuItem('complete', Icons.auto_awesome_rounded, 'الإكمال التلقائي'),
+                _bishoMenuItem('saveall', Icons.save_rounded, 'حفظ جميع الملفات'),
+                _bishoMenuItem('terminal', Icons.terminal_rounded, 'فتح الطرفية'),
+                const PopupMenuDivider(),
+                _bishoMenuItem('exit', Icons.exit_to_app_rounded, 'الخروج من التطبيق', color: Colors.orangeAccent),
               ],
             ),
           ],
@@ -4666,25 +4674,34 @@ class _EditorScreenState extends State<EditorScreen> with WidgetsBindingObserver
                 ),
               ),
             if (!_editorFullScreen) ...[
-            buildTabBar(),
+            Theme(data: BishoTheme.darkTheme, child: buildTabBar()),
             Container(
               padding: const EdgeInsets.symmetric(
                 horizontal: 10,
                 vertical: 5,
               ),
-              color: const Color(0xFF111827),
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.surface,
+                border: Border(
+                  bottom: BorderSide(color: Theme.of(context).colorScheme.outline),
+                ),
+              ),
               child: Row(
                 children: [
+                  const Icon(Icons.insert_drive_file_outlined, size: 16, color: Color(0xFF94A3B8)),
+                  const SizedBox(width: 6),
                   Expanded(
                     child: Text(
                       tab.fileName,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontSize: 12),
+                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
                     ),
                   ),
                   DropdownButton<String>(
+                    borderRadius: BorderRadius.circular(12),
+                    isDense: true,
                     value: tab.language,
-                    dropdownColor: const Color(0xFF1E293B),
+                    dropdownColor: Theme.of(context).colorScheme.surfaceContainerHighest,
                     underline: const SizedBox(),
                     items: languages.keys.map((language) {
                       return DropdownMenuItem<String>(
@@ -4699,20 +4716,28 @@ class _EditorScreenState extends State<EditorScreen> with WidgetsBindingObserver
             ),
 
             Expanded(
-              child: _buildToolsDashboard(tab),
+              child: Theme(
+                data: BishoTheme.darkTheme,
+                child: _buildToolsDashboard(tab),
+              ),
             ),
             if (!_editorFullScreen && _bottomPanelVisible)
-              buildBottomPanel(tab),
+              Theme(data: BishoTheme.darkTheme, child: buildBottomPanel(tab)),
             if (!_editorFullScreen)
               Container(
-              height: 34,
-              padding: const EdgeInsets.symmetric(horizontal: 10),
-              color: const Color(0xFF151C30),
+              height: 36,
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.surfaceContainerHigh,
+                border: Border(
+                  top: BorderSide(color: Theme.of(context).colorScheme.outline),
+                ),
+              ),
               child: Row(
                 children: [
-                  const Icon(
+                  Icon(
                     Icons.circle,
-                    color: Colors.green,
+                    color: tab.isSaved ? Colors.green : Colors.amber,
                     size: 9,
                   ),
                   const SizedBox(width: 6),
@@ -4785,7 +4810,7 @@ class _EditorScreenState extends State<EditorScreen> with WidgetsBindingObserver
       _DashboardAction(Icons.redo_rounded, 'إعادة', redoCodeEdit, green),
     ];
     final extras = <_DashboardAction>[
-      _DashboardAction(Icons.palette_rounded, 'الثيمة', _showDashboardThemeInfo, green),
+      _DashboardAction(Icons.palette_rounded, 'تبديل الثيم', _showDashboardThemeInfo, green),
       _DashboardAction(Icons.rocket_launch_rounded, 'أدوات سريعة', showCodeCompletions, violet),
       _DashboardAction(Icons.analytics_rounded, 'تحليل الكود', _openDiagnosticsPanel, cyan),
       _DashboardAction(Icons.health_and_safety_rounded, 'فحص المشروع', _openProjectInsightsPanel, green),
@@ -4803,7 +4828,6 @@ class _EditorScreenState extends State<EditorScreen> with WidgetsBindingObserver
       _DashboardAction(Icons.text_increase_rounded, 'تكبير الخط', () => changeEditorFontSize(1), cyan),
       _DashboardAction(Icons.text_decrease_rounded, 'تصغير الخط', () => changeEditorFontSize(-1), cyan),
       _DashboardAction(Icons.vertical_align_bottom_rounded, 'لوحة المشكلات', _openDiagnosticsPanel, amber),
-      _DashboardAction(Icons.health_and_safety_rounded, 'فحص المشروع', _openProjectInsightsPanel, green),
       _DashboardAction(Icons.save_rounded, 'حفظ جميع الملفات', saveAllTabs, green),
       _DashboardAction(Icons.settings_rounded, 'إعدادات مساحة العمل', _showWorkspaceSettings, green),
       _DashboardAction(Icons.extension_rounded, 'اللغات المدعومة', _showLanguageCapabilities, cyan),
@@ -4818,10 +4842,10 @@ class _EditorScreenState extends State<EditorScreen> with WidgetsBindingObserver
       child: Stack(children: [
         Positioned(left: -100, bottom: 10, child: Container(width: 260, height: 170,
           decoration: BoxDecoration(shape: BoxShape.circle,
-            boxShadow: [BoxShadow(color: cyan.withOpacity(.20), blurRadius: 75, spreadRadius: 20)]))),
+            boxShadow: [BoxShadow(color: cyan.withValues(alpha: .20), blurRadius: 75, spreadRadius: 20)]))),
         Positioned(right: -100, bottom: 0, child: Container(width: 260, height: 170,
           decoration: BoxDecoration(shape: BoxShape.circle,
-            boxShadow: [BoxShadow(color: violet.withOpacity(.20), blurRadius: 75, spreadRadius: 20)]))),
+            boxShadow: [BoxShadow(color: violet.withValues(alpha: .20), blurRadius: 75, spreadRadius: 20)]))),
         Positioned(left: 0, right: 0, bottom: 0, height: 150,
           child: IgnorePointer(child: CustomPaint(painter: _DashboardWavePainter()))),
         ListView(
@@ -4902,8 +4926,8 @@ class _EditorScreenState extends State<EditorScreen> with WidgetsBindingObserver
 
   Widget _dashboardFileStrip(EditorTab tab) => Container(
     height: 54, padding: const EdgeInsets.symmetric(horizontal: 10),
-    decoration: BoxDecoration(color: const Color(0xFF0A1428).withOpacity(.88),
-      border: Border(bottom: BorderSide(color: const Color(0xFF147DBB).withOpacity(.55)))),
+    decoration: BoxDecoration(color: const Color(0xFF0A1428).withValues(alpha: .88),
+      border: Border(bottom: BorderSide(color: const Color(0xFF147DBB).withValues(alpha: .55)))),
     child: Row(children: [
       IconButton(onPressed: createNewTab, icon: const Icon(Icons.add, color: Color(0xFF08B9F4), size: 30)),
       const Spacer(),
@@ -4919,7 +4943,7 @@ class _EditorScreenState extends State<EditorScreen> with WidgetsBindingObserver
     padding: const EdgeInsets.all(9),
     decoration: BoxDecoration(borderRadius: BorderRadius.circular(25),
       gradient: const LinearGradient(colors: [Color(0xFF0789D7), Color(0xFF202A73), Color(0xFF8C20D8)]),
-      boxShadow: [BoxShadow(color: const Color(0xFF087FEA).withOpacity(.22), blurRadius: 18, spreadRadius: 1)]),
+      boxShadow: [BoxShadow(color: const Color(0xFF087FEA).withValues(alpha: .22), blurRadius: 18, spreadRadius: 1)]),
     child: Container(padding: const EdgeInsets.all(5),
       decoration: BoxDecoration(color: const Color(0xFF0A142A), borderRadius: BorderRadius.circular(19)),
       child: child),
@@ -4929,7 +4953,7 @@ class _EditorScreenState extends State<EditorScreen> with WidgetsBindingObserver
     Material(color: const Color(0xFF111E37), borderRadius: BorderRadius.circular(19),
       child: InkWell(onTap: onTap, borderRadius: BorderRadius.circular(19),
         child: Container(decoration: BoxDecoration(borderRadius: BorderRadius.circular(19),
-          border: Border.all(color: color.withOpacity(.42))),
+          border: Border.all(color: color.withValues(alpha: .42))),
           child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
             Icon(icon, color: color, size: 31), const SizedBox(height: 8),
             Text(label, style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600)),
@@ -4941,20 +4965,80 @@ class _EditorScreenState extends State<EditorScreen> with WidgetsBindingObserver
         side: const BorderSide(color: Color(0xFF3155A7)), shape: const StadiumBorder()));
 
   void _showAllDashboardTools(List<_DashboardAction> actions) {
-    showModalBottomSheet<void>(context: context, isScrollControlled: true,
-      backgroundColor: const Color(0xFF0B1428), builder: (sheetContext) => SafeArea(
-        child: SizedBox(height: MediaQuery.of(sheetContext).size.height * .72,
-          child: Column(children: [
-            const Padding(padding: EdgeInsets.all(16), child: Text('جميع أدوات Bisho IDE',
-              style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold))),
-            Expanded(child: GridView.builder(padding: const EdgeInsets.all(12), itemCount: actions.length,
-              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: 3, crossAxisSpacing: 9, mainAxisSpacing: 9, childAspectRatio: 1.15),
-              itemBuilder: (_, index) => _dashboardToolCard(_DashboardAction(
-                actions[index].icon, actions[index].label, () {
-                  Navigator.pop(sheetContext); actions[index].onTap();
-                }, actions[index].color)))),
-          ]))));
+    var query = '';
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Theme.of(context).colorScheme.surface,
+      builder: (sheetContext) => StatefulBuilder(
+        builder: (context, setSheetState) {
+          final needle = query.trim().toLowerCase();
+          final filtered = needle.isEmpty
+              ? actions
+              : actions
+                  .where((a) => a.label.toLowerCase().contains(needle))
+                  .toList();
+          return SafeArea(
+            child: Padding(
+              padding: EdgeInsets.only(
+                bottom: MediaQuery.of(sheetContext).viewInsets.bottom,
+              ),
+              child: SizedBox(
+                height: MediaQuery.of(sheetContext).size.height * .78,
+                child: Column(
+                  children: [
+                    const Padding(
+                      padding: EdgeInsets.fromLTRB(16, 4, 16, 8),
+                      child: Text(
+                        'جميع أدوات Bisho IDE',
+                        style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 14),
+                      child: TextField(
+                        onChanged: (value) => setSheetState(() => query = value),
+                        textInputAction: TextInputAction.search,
+                        decoration: const InputDecoration(
+                          hintText: 'ابحث عن أداة...',
+                          prefixIcon: Icon(Icons.search_rounded),
+                          isDense: true,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Expanded(
+                      child: filtered.isEmpty
+                          ? const Center(child: Text('لا توجد أدوات مطابقة'))
+                          : GridView.builder(
+                              padding: const EdgeInsets.all(12),
+                              itemCount: filtered.length,
+                              gridDelegate:
+                                  const SliverGridDelegateWithFixedCrossAxisCount(
+                                crossAxisCount: 3,
+                                crossAxisSpacing: 9,
+                                mainAxisSpacing: 9,
+                                childAspectRatio: 1.15,
+                              ),
+                              itemBuilder: (_, index) {
+                                final action = filtered[index];
+                                return _dashboardToolCard(
+                                  _DashboardAction(action.icon, action.label, () {
+                                    Navigator.pop(sheetContext);
+                                    action.onTap();
+                                  }, action.color),
+                                );
+                              },
+                            ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
   }
 
   Widget _workspaceMetricsPanel() {
@@ -4978,7 +5062,7 @@ class _EditorScreenState extends State<EditorScreen> with WidgetsBindingObserver
           const SizedBox(height: 7),
           Text(
             'الإحصائيات محسوبة من محتوى التبويبات المفتوحة فقط',
-            style: TextStyle(color: Colors.white.withOpacity(.48), fontSize: 10),
+            style: TextStyle(color: Colors.white.withValues(alpha: .48), fontSize: 10),
           ),
         ],
       ),
@@ -5007,7 +5091,6 @@ class _EditorScreenState extends State<EditorScreen> with WidgetsBindingObserver
         context: context,
         builder: (dialogContext) => StatefulBuilder(
           builder: (context, setDialogState) => AlertDialog(
-            backgroundColor: const Color(0xFF101A30),
             title: const Text('مقارنة النص الحالي بنسخة سابقة'),
             content: SizedBox(
               width: 620,
@@ -5111,7 +5194,6 @@ class _EditorScreenState extends State<EditorScreen> with WidgetsBindingObserver
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
-      backgroundColor: const Color(0xFF0B1428),
       builder: (sheetContext) => SafeArea(
         child: SizedBox(
           height: MediaQuery.of(sheetContext).size.height * .72,
@@ -5170,7 +5252,7 @@ class _EditorScreenState extends State<EditorScreen> with WidgetsBindingObserver
     child: Container(
       margin: const EdgeInsets.symmetric(horizontal: 4),
       padding: const EdgeInsets.symmetric(vertical: 9),
-      decoration: BoxDecoration(color: color.withOpacity(.10), borderRadius: BorderRadius.circular(10)),
+      decoration: BoxDecoration(color: color.withValues(alpha: .10), borderRadius: BorderRadius.circular(10)),
       child: Column(children: [
         Text('$count', style: TextStyle(color: color, fontSize: 18, fontWeight: FontWeight.bold)),
         Text(label, style: const TextStyle(fontSize: 10, color: Color(0xFFCBD5E1))),
@@ -5192,7 +5274,6 @@ class _EditorScreenState extends State<EditorScreen> with WidgetsBindingObserver
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
-      backgroundColor: const Color(0xFF111827),
       builder: (sheetContext) => SafeArea(
         child: SizedBox(
           height: MediaQuery.of(sheetContext).size.height * .62,
@@ -5253,7 +5334,7 @@ class _EditorScreenState extends State<EditorScreen> with WidgetsBindingObserver
                 padding: const EdgeInsets.all(12),
                 child: Text(
                   'الفحص بنيوي ومحلي؛ اضغط على المشكلة ذات الموقع للانتقال إليها. لا يحل محل محلل المترجم الرسمي.',
-                  style: TextStyle(fontSize: 10, color: Colors.white.withOpacity(.55)),
+                  style: TextStyle(fontSize: 10, color: Colors.white.withValues(alpha: .55)),
                 ),
               ),
             ],
@@ -5269,7 +5350,6 @@ class _EditorScreenState extends State<EditorScreen> with WidgetsBindingObserver
     final saved = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
-      backgroundColor: const Color(0xFF111827),
       builder: (sheetContext) => StatefulBuilder(
         builder: (context, refreshSheet) => SafeArea(
           child: Padding(
@@ -5341,9 +5421,9 @@ class _EditorScreenState extends State<EditorScreen> with WidgetsBindingObserver
       child: Container(
         decoration: BoxDecoration(borderRadius: BorderRadius.circular(19),
           gradient: LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight,
-            colors: [action.color.withOpacity(.17), const Color(0xFF111B34), const Color(0xFF0C142A)]),
-          border: Border.all(color: action.color.withOpacity(.38)),
-          boxShadow: [BoxShadow(color: action.color.withOpacity(.10), blurRadius: 12)]),
+            colors: [action.color.withValues(alpha: .17), const Color(0xFF111B34), const Color(0xFF0C142A)]),
+          border: Border.all(color: action.color.withValues(alpha: .38)),
+          boxShadow: [BoxShadow(color: action.color.withValues(alpha: .10), blurRadius: 12)]),
         constraints: const BoxConstraints(minHeight: 104),
         padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 8),
         child: Column(mainAxisSize: MainAxisSize.min, mainAxisAlignment: MainAxisAlignment.center, children: [
@@ -5378,8 +5458,8 @@ class _EditorScreenState extends State<EditorScreen> with WidgetsBindingObserver
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: accent.withOpacity(.38)),
-            boxShadow: [BoxShadow(color: accent.withOpacity(.10), blurRadius: 13)],
+            border: Border.all(color: accent.withValues(alpha: .38)),
+            boxShadow: [BoxShadow(color: accent.withValues(alpha: .10), blurRadius: 13)],
           ),
           child: Row(children: [
             Container(width: 42, height: 42,
@@ -5405,8 +5485,9 @@ class _EditorScreenState extends State<EditorScreen> with WidgetsBindingObserver
     );
 
   void _showDashboardThemeInfo() {
+    BishoThemeController.toggle();
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('الثيم الداكن الهادئ قيد الاستخدام')),
+      const SnackBar(content: Text('تم تبديل الثيم')),
     );
   }
 
@@ -5425,7 +5506,6 @@ class _EditorScreenState extends State<EditorScreen> with WidgetsBindingObserver
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
-      backgroundColor: const Color(0xFF0B1428),
       builder: (sheetContext) => SafeArea(
         child: SizedBox(
           height: MediaQuery.of(sheetContext).size.height * .72,
@@ -5549,7 +5629,6 @@ class _EditorScreenState extends State<EditorScreen> with WidgetsBindingObserver
     showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
-      backgroundColor: const Color(0xFF111827),
       builder: (sheetContext) => SafeArea(
         child: SizedBox(
           height: MediaQuery.of(sheetContext).size.height * .72,
@@ -6053,7 +6132,6 @@ class _EditorFullScreenScreenState extends State<EditorFullScreenScreen> {
       child: Scaffold(
         backgroundColor: const Color(0xFF080D19),
         appBar: AppBar(
-          backgroundColor: const Color(0xFF151C30),
           leading: IconButton(
             tooltip: 'العودة إلى Bisho IDE',
             icon: const Icon(Icons.arrow_back),

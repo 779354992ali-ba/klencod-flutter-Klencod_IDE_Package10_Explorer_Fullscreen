@@ -45,5 +45,15 @@ void main() {
       expect(report.addedCount, 1);
       expect(report.removedCount, 1);
     });
+
+    test('exposes an immutable result line list', () {
+      final report = diff.compare('before', 'after');
+      expect(
+        () => report.lines.add(
+          const TextDiffLine(kind: TextDiffKind.added, text: 'extra'),
+        ),
+        throwsUnsupportedError,
+      );
+    });
   });
 }

@@ -187,7 +187,7 @@ class EditorSymbolIndex {
         if (name == null || name.isEmpty) continue;
         final key = '${entry.kind}:$name';
         if (!seen.add(key)) break;
-        symbols.add(EditorSymbol(name: name, kind: entry.kind, line: i + 1, offset: offset + match.start(1)));
+        symbols.add(EditorSymbol(name: name, kind: entry.kind, line: i + 1, offset: offset + match.start + match.group(0)!.indexOf(name)));
         break;
       }
       offset += line.length + 1;

@@ -1360,7 +1360,8 @@ description: ${jsonEncode(description)}
         break;
     }
 
-    _appendTemplateFiles(files);
+    _appendTemplateFiles(files, entry: entry, version: version);
+    _appendEssentialBuildFiles(files);
     if (_projectMode == 'integrated') {
       files.putIfAbsent('.vscode/settings.json', () => '''{\n  \"files.trimTrailingWhitespace\": true,\n  \"editor.insertSpaces\": true,\n  \"editor.tabSize\": 2\n}\n''');
       files.putIfAbsent('docs/PROJECT_OVERVIEW.md', () => '# $_projectName\n\nProject overview and development notes.\n');
@@ -1369,7 +1370,69 @@ description: ${jsonEncode(description)}
     return files;
   }
 
-  void _appendTemplateFiles(Map<String, String> files) {
+  /// Adds the base folders/files every project needs to build and preview.
+  /// Existing entries are never replaced and case-insensitive collisions are
+  /// skipped so the file-plan preflight keeps passing.
+  void _appendEssentialBuildFiles(Map<String, String> files) {
+    final existing = files.keys.map((key) => key.toLowerCase()).toSet();
+    void add(String path, String content) {
+      if (existing.add(path.toLowerCase())) files[path] = content;
+    }
+
+    add('.editorconfig',
+        'root = true\n\n[*]\ncharset = utf-8\nend_of_line = lf\ninsert_final_newline = true\ntrim_trailing_whitespace = true\nindent_style = space\nindent_size = 2\n');
+
+    switch (_selectedLanguage) {
+      case 'Flutter':
+        add('analysis_options.yaml',
+            'include: package:flutter_lints/flutter.yaml\n\nlinter:\n  rules:\n    avoid_print: false\n');
+        add('test/widget_test.dart', r'''import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+
+void main() {
+  testWidgets('smoke test renders a Material app', (tester) async {
+    await tester.pumpWidget(
+      const MaterialApp(home: Scaffold(body: Center(child: Text('ok')))),
+    );
+    expect(find.text('ok'), findsOneWidget);
+  });
+}
+''');
+        add('assets/images/.gitkeep', '');
+        add('.gitattributes',
+            '* text=auto\nandroid/gradlew text eol=lf\nandroid/gradlew.bat text eol=crlf\n*.jar binary\n');
+        add('android/.gitignore',
+            '/.gradle\n/captures/\n/local.properties\nGeneratedPluginRegistrant.java\nkey.properties\n**/*.keystore\n**/*.jks\n');
+        const debugManifest =
+            '<manifest xmlns:android="http://schemas.android.com/apk/res/android">\n    <uses-permission android:name="android.permission.INTERNET"/>\n</manifest>\n';
+        add('android/app/src/debug/AndroidManifest.xml', debugManifest);
+        add('android/app/src/profile/AndroidManifest.xml', debugManifest);
+        add('android/app/src/main/res/drawable/launch_background.xml',
+            '<?xml version="1.0" encoding="utf-8"?>\n<layer-list xmlns:android="http://schemas.android.com/apk/res/android">\n    <item android:drawable="@android:color/white" />\n</layer-list>\n');
+        add('android/app/src/main/res/drawable/ic_launcher.xml',
+            '<?xml version="1.0" encoding="utf-8"?>\n<vector xmlns:android="http://schemas.android.com/apk/res/android"\n    android:width="108dp" android:height="108dp"\n    android:viewportWidth="108" android:viewportHeight="108">\n    <path android:fillColor="#0EA5E9" android:pathData="M0,0h108v108h-108z" />\n    <path android:fillColor="#FFFFFF" android:pathData="M36,38l-14,16l14,16l5,-5l-9,-11l9,-11zM72,38l-5,5l9,11l-9,11l5,5l14,-16zM58,32l-8,44l6,1l8,-44z" />\n</vector>\n');
+        const manifestKey = 'android/app/src/main/AndroidManifest.xml';
+        final manifest = files[manifestKey];
+        if (manifest != null && !manifest.contains('android:icon=')) {
+          files[manifestKey] = manifest.replaceFirst(
+            '<application ',
+            '<application android:icon="@drawable/ic_launcher" ',
+          );
+        }
+        break;
+      case 'HTML':
+      case 'CSS':
+      case 'JavaScript':
+      case 'TypeScript':
+        add('assets/images/.gitkeep', '');
+        break;
+      case 'Python':
+        add('requirements.txt', '# Add project dependencies here\n');
+        break;
+    }
+  }
+
+  void _appendTemplateFiles(Map<String, String> files, {required String entry, required String version}) {
     switch (_selectedLanguage) {
       case 'Flutter':
         if (_selectedTemplate == 'multi_page') {

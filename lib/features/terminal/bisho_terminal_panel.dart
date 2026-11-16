@@ -854,6 +854,112 @@ class _BishoTerminalPanelState extends State<BishoTerminalPanel> {
     );
   }
 
+  String _commonPrefix(List<String> values) {
+    if (values.isEmpty) return '';
+    var prefix = values.first;
+    for (final value in values.skip(1)) {
+      var i = 0;
+      while (i < prefix.length && i < value.length && prefix[i] == value[i]) {
+        i++;
+      }
+      prefix = prefix.substring(0, i);
+    }
+    return prefix;
+  }
+
+  /// Tab-completion for touch keyboards: completes command names for the
+  /// first token and file/folder names of the current directory afterwards.
+  Future<void> _complete() async {
+    if (_busy) return;
+    final text = _commandController.text;
+    final lastSpace = text.lastIndexOf(' ');
+    final head = lastSpace < 0 ? '' : text.substring(0, lastSpace + 1);
+    final token = lastSpace < 0 ? text : text.substring(lastSpace + 1);
+
+    List<String> candidates;
+    if (lastSpace < 0) {
+      candidates = _commands.where((c) => c.startsWith(token)).toList();
+    } else {
+      final uri = _currentUri;
+      if (uri == null) return;
+      try {
+        final children = await widget.files.listDirectory(uri);
+        candidates = children
+            .where((item) => !item.name.contains(' ') && item.name.startsWith(token))
+            .map((item) => item.isDir ? '${item.name}/' : item.name)
+            .toList();
+      } catch (_) {
+        return;
+      }
+    }
+    if (!mounted || candidates.isEmpty) return;
+
+    final completed = candidates.length == 1
+        ? candidates.first
+        : _commonPrefix(candidates);
+    if (completed.length > token.length) {
+      _commandController.text = '$head$completed';
+      _commandController.selection = TextSelection.collapsed(
+        offset: _commandController.text.length,
+      );
+    }
+    if (candidates.length > 1) {
+      _write(candidates.take(40).join('   '), _muted);
+    }
+  }
+
+  Future<void> _copyOutput() async {
+    final text = _output.map((line) => line.text).join('\n');
+    await Clipboard.setData(ClipboardData(text: text));
+    if (!mounted) return;
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      const SnackBar(content: Text('تم نسخ ناتج الطرفية')),
+    );
+  }
+
+  void _insertQuickCommand(String command, {bool run = true}) {
+    if (_busy) return;
+    if (run) {
+      _execute(command);
+    } else {
+      _commandController.text = command;
+      _commandController.selection = TextSelection.collapsed(offset: command.length);
+      _commandFocus.requestFocus();
+    }
+  }
+
+  Widget _quickBar() {
+    Widget chip(String label, VoidCallback onTap, {IconData? icon}) => Padding(
+          padding: const EdgeInsets.only(right: 6),
+          child: ActionChip(
+            visualDensity: VisualDensity.compact,
+            avatar: icon == null ? null : Icon(icon, size: 15, color: _cyan),
+            label: Text(label, style: const TextStyle(fontSize: 11, fontFamily: 'monospace')),
+            onPressed: _busy ? null : onTap,
+          ),
+        );
+    return SizedBox(
+      height: 38,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        children: [
+          chip('Tab', _complete, icon: Icons.keyboard_tab_rounded),
+          chip('↑', () => _historyMove(-1)),
+          chip('↓', () => _historyMove(1)),
+          chip('ls', () => _insertQuickCommand('ls')),
+          chip('pwd', () => _insertQuickCommand('pwd')),
+          chip('tree', () => _insertQuickCommand('tree')),
+          chip('cd ..', () => _insertQuickCommand('cd ..')),
+          chip('cat ', () => _insertQuickCommand('cat ', run: false)),
+          chip('help', () => _insertQuickCommand('help')),
+          chip('نسخ الناتج', _copyOutput, icon: Icons.copy_rounded),
+          chip('مسح', _clearOutput, icon: Icons.delete_sweep_rounded),
+        ],
+      ),
+    );
+  }
+
   void _clearOutput() {
     setState(_output.clear);
   }
@@ -881,6 +987,7 @@ class _BishoTerminalPanelState extends State<BishoTerminalPanel> {
             ),
           ),
           const Divider(height: 1, color: Color(0xFF263449)),
+          _quickBar(),
           Padding(
             padding: const EdgeInsets.fromLTRB(10, 5, 6, 6),
             child: Row(
@@ -895,6 +1002,8 @@ class _BishoTerminalPanelState extends State<BishoTerminalPanel> {
                           const _TerminalHistoryIntent(1),
                       const SingleActivator(LogicalKeyboardKey.keyL, control: true):
                           const _TerminalClearIntent(),
+                      const SingleActivator(LogicalKeyboardKey.tab):
+                          const _TerminalCompleteIntent(),
                     },
                     child: Actions(
                       actions: <Type, Action<Intent>>{
@@ -902,6 +1011,13 @@ class _BishoTerminalPanelState extends State<BishoTerminalPanel> {
                             CallbackAction<_TerminalHistoryIntent>(
                           onInvoke: (intent) {
                             _historyMove(intent.direction);
+                            return null;
+                          },
+                        ),
+                        _TerminalCompleteIntent:
+                            CallbackAction<_TerminalCompleteIntent>(
+                          onInvoke: (_) {
+                            _complete();
                             return null;
                           },
                         ),
@@ -959,6 +1075,10 @@ class _BishoTerminalPanelState extends State<BishoTerminalPanel> {
 class _TerminalHistoryIntent extends Intent {
   final int direction;
   const _TerminalHistoryIntent(this.direction);
+}
+
+class _TerminalCompleteIntent extends Intent {
+  const _TerminalCompleteIntent();
 }
 
 class _TerminalClearIntent extends Intent {

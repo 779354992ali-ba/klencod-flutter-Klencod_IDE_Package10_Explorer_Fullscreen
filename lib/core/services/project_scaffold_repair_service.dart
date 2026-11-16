@@ -2,7 +2,6 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter/services.dart';
-import 'package:saf/saf.dart';
 
 import 'saf_file_service.dart';
 import 'project_health_analyzer.dart';
