@@ -23,6 +23,14 @@ void main() {
       expect(SafFileService.mimeTypeForName('data.json'), 'application/json');
       expect(SafFileService.mimeTypeForName('unknown.bin'),
           'application/octet-stream');
+      expect(SafFileService.mimeTypeForName('settings.gradle'),
+          'application/octet-stream');
+      expect(SafFileService.mimeTypeForName('gradle.properties'),
+          'application/octet-stream');
+      expect(SafFileService.mimeTypeForName('gradlew.bat'),
+          'application/octet-stream');
+      expect(SafFileService.mimeTypeForName('gradlew'),
+          'application/octet-stream');
     });
   });
 }

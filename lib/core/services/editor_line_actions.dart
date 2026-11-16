@@ -29,7 +29,7 @@ class EditorLineActions {
     lines.insertAll(end + 1, copies);
     final newText = lines.join('\n');
     final newStart = _offsetForLine(lines, start + copies.length);
-    final newEnd = newStart + copies.join('\n').length;
+    final newEnd = _offsetForLine(lines, start + copies.length + copies.length);
     final boundedEnd = newEnd.clamp(newStart, newText.length).toInt();
     return EditorLineEditResult(
       text: newText,

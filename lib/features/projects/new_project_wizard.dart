@@ -513,9 +513,14 @@ class _NewProjectWizardState extends State<NewProjectWizard> {
 
   String _mimeType(String fileName) {
     final lower = fileName.toLowerCase();
-    if (lower == 'gradlew') return 'text/x-shellscript';
+    if (lower == 'gradlew') return 'application/octet-stream';
     if (lower.endsWith('.jar')) return 'application/java-archive';
-    if (lower.endsWith('.bat') || lower.endsWith('.properties')) return 'text/plain';
+    if (lower.endsWith('.gradle') ||
+        lower.endsWith('.bat') ||
+        lower.endsWith('.properties') ||
+        lower.endsWith('.sh')) {
+      return 'application/octet-stream';
+    }
 
     if (lower.endsWith('.dart')) return 'text/x-dart';
     if (lower.endsWith('.py')) return 'text/x-python';
@@ -527,7 +532,6 @@ class _NewProjectWizardState extends State<NewProjectWizard> {
     if (lower.endsWith('.xml')) return 'application/xml';
     if (lower.endsWith('.sql')) return 'application/sql';
     if (lower.endsWith('.md')) return 'text/markdown';
-    if (lower.endsWith('.sh')) return 'text/x-shellscript';
     if (lower.endsWith('.java')) return 'text/x-java';
     if (lower.endsWith('.kt')) return 'text/x-kotlin';
     if (lower.endsWith('.swift')) return 'text/x-swift';
@@ -1366,10 +1370,6 @@ description: ${jsonEncode(description)}
   }
 
   void _appendTemplateFiles(Map<String, String> files) {
-    final entry = _actualEntryFile.isEmpty ? _defaultEntryFile : _actualEntryFile;
-    final version = _versionController.text.trim().isEmpty
-        ? '1.0.0'
-        : _versionController.text.trim();
     switch (_selectedLanguage) {
       case 'Flutter':
         if (_selectedTemplate == 'multi_page') {

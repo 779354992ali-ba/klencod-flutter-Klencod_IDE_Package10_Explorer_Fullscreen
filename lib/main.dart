@@ -55,6 +55,7 @@ import 'core/services/project_insights_analyzer.dart';
 import 'core/services/project_backup_service.dart';
 import 'core/services/project_backup_repository.dart';
 import 'core/services/project_text_diff.dart';
+import 'features/terminal/bisho_terminal_panel.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -1038,6 +1039,12 @@ class _EditorScreenState extends State<EditorScreen> with WidgetsBindingObserver
     final ext =
         name.contains('.') ? name.split('.').last.toLowerCase() : '';
 
+    // Avoid Android SAF providers adding .txt to build/config files.
+    if (const {'gradle', 'properties', 'bat', 'sh'}.contains(ext) ||
+        name.toLowerCase() == 'gradlew') {
+      return 'application/octet-stream';
+    }
+
     const types = {
       'dart': 'text/plain',
       'py': 'text/x-python',
@@ -1052,7 +1059,6 @@ class _EditorScreenState extends State<EditorScreen> with WidgetsBindingObserver
       'kt': 'text/plain',
       'php': 'text/plain',
       'sql': 'text/plain',
-      'sh': 'text/plain',
       'txt': 'text/plain',
     };
 
@@ -2464,7 +2470,7 @@ class _EditorScreenState extends State<EditorScreen> with WidgetsBindingObserver
                     leading: const Icon(Icons.restore_rounded),
                     title: Text(item.createdAt.toLocal().toString(), maxLines: 1, overflow: TextOverflow.ellipsis),
                     subtitle: Text('${item.fileCount} ملف · ${item.directoryCount} مجلد · ${(item.totalBytes / 1048576).toStringAsFixed(2)} MB'),
-                    trailing: Wrap(children: [
+                    trailing: Wrap(mainAxisSize: MainAxisSize.min, children: [
                       IconButton(
                         tooltip: 'استعادة هذه النقطة', icon: const Icon(Icons.settings_backup_restore_rounded),
                         onPressed: () => Navigator.pop(dialogContext, {'action': 'restore', 'snapshot': item}),
@@ -3408,6 +3414,15 @@ class _EditorScreenState extends State<EditorScreen> with WidgetsBindingObserver
     return diagnostics;
   }
 
+  void _showTerminalPanel() {
+    setState(() {
+      _bottomPanelVisible = true;
+      _bottomPanelTab = 2;
+      _editorFullScreen = false;
+    });
+    _saveEditorPreferences();
+  }
+
   Widget buildBottomPanel(EditorTab tab) {
     final diagnostics = _getCurrentDiagnostics(tab);
     final lines = tab.controller.text.isEmpty
@@ -3415,6 +3430,7 @@ class _EditorScreenState extends State<EditorScreen> with WidgetsBindingObserver
         : '\n'.allMatches(tab.controller.text).length + 1;
     final characters = tab.controller.text.length;
     final isProblems = _bottomPanelTab == 0;
+    final isFileInfo = _bottomPanelTab == 1;
 
     return Container(
       height: _bottomPanelHeight,
@@ -3491,6 +3507,25 @@ class _EditorScreenState extends State<EditorScreen> with WidgetsBindingObserver
                     ),
                   ),
                 ),
+                TextButton.icon(
+                  onPressed: _showTerminalPanel,
+                  icon: Icon(
+                    Icons.terminal,
+                    size: 16,
+                    color: _bottomPanelTab == 2
+                        ? const Color(0xFF38BDF8)
+                        : Colors.white54,
+                  ),
+                  label: Text(
+                    'الطرفية',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: _bottomPanelTab == 2
+                          ? const Color(0xFF38BDF8)
+                          : Colors.white70,
+                    ),
+                  ),
+                ),
                 const Spacer(),
                 IconButton(
                   tooltip: 'إغلاق اللوحة',
@@ -3529,23 +3564,34 @@ class _EditorScreenState extends State<EditorScreen> with WidgetsBindingObserver
                           ),
                         ),
                       )
-                : Padding(
-                    padding: const EdgeInsets.all(12),
-                    child: Align(
-                      alignment: Alignment.topRight,
-                      child: Wrap(
-                        spacing: 18,
-                        runSpacing: 8,
-                        children: [
-                          _panelInfo('الملف', tab.fileName),
-                          _panelInfo('اللغة', tab.language),
-                          _panelInfo('الأسطر', '$lines'),
-                          _panelInfo('الأحرف', '$characters'),
-                          _panelInfo('الحالة', tab.isSaved ? 'محفوظ' : 'معدّل'),
-                        ],
+                : isFileInfo
+                    ? Padding(
+                        padding: const EdgeInsets.all(12),
+                        child: Align(
+                          alignment: Alignment.topRight,
+                          child: Wrap(
+                            spacing: 18,
+                            runSpacing: 8,
+                            children: [
+                              _panelInfo('الملف', tab.fileName),
+                              _panelInfo('اللغة', tab.language),
+                              _panelInfo('الأسطر', '$lines'),
+                              _panelInfo('الأحرف', '$characters'),
+                              _panelInfo('الحالة', tab.isSaved ? 'محفوظ' : 'معدّل'),
+                            ],
+                          ),
+                        ),
+                      )
+                    : BishoTerminalPanel(
+                        files: safFiles,
+                        projectUri: projectUri,
+                        projectName: projectName,
+                        onOpenFile: (file, parentUri) => openProjectFile(
+                          file,
+                          parentUri,
+                          closeOverlay: false,
+                        ),
                       ),
-                    ),
-                  ),
           ),
         ],
       ),
@@ -4488,6 +4534,11 @@ class _EditorScreenState extends State<EditorScreen> with WidgetsBindingObserver
               icon: const Icon(Icons.save),
               tooltip: 'حفظ الملف',
             ),
+            IconButton(
+              onPressed: _showTerminalPanel,
+              icon: const Icon(Icons.terminal, color: Color(0xFF38BDF8)),
+              tooltip: 'فتح الطرفية',
+            ),
             PopupMenuButton<String>(
               onSelected: (value) {
                 if (value == 'new') createNewTab();
@@ -4500,6 +4551,7 @@ class _EditorScreenState extends State<EditorScreen> with WidgetsBindingObserver
                 if (value == 'search') searchCode();
                 if (value == 'copy') copyCode();
                 if (value == 'saveall') saveAllTabs();
+                if (value == 'terminal') _showTerminalPanel();
                 if (value == 'complete') showCodeCompletions();
                 if (value == 'exit') _confirmApplicationExit();
               },
@@ -4557,6 +4609,16 @@ class _EditorScreenState extends State<EditorScreen> with WidgetsBindingObserver
                 PopupMenuItem(
                   value: 'saveall',
                   child: Text('حفظ جميع الملفات'),
+                ),
+                PopupMenuItem(
+                  value: 'terminal',
+                  child: Row(
+                    children: [
+                      Icon(Icons.terminal, size: 18, color: Color(0xFF38BDF8)),
+                      SizedBox(width: 8),
+                      Text('فتح الطرفية'),
+                    ],
+                  ),
                 ),
                 PopupMenuDivider(),
                 PopupMenuItem(
@@ -4639,6 +4701,8 @@ class _EditorScreenState extends State<EditorScreen> with WidgetsBindingObserver
             Expanded(
               child: _buildToolsDashboard(tab),
             ),
+            if (!_editorFullScreen && _bottomPanelVisible)
+              buildBottomPanel(tab),
             if (!_editorFullScreen)
               Container(
               height: 34,

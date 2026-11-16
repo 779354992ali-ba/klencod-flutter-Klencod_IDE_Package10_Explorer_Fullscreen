@@ -61,6 +61,13 @@ class SafFileService {
       'yaml': 'application/yaml', 'yml': 'application/yaml',
       'pdf': 'application/pdf', 'png': 'image/png',
       'jpg': 'image/jpeg', 'jpeg': 'image/jpeg',
+      // These extensions are frequently rewritten by Android document
+      // providers when a text/* MIME type is supplied (for example .gradle
+      // becoming .gradle.txt). Use a neutral MIME type and verify the name.
+      'gradle': 'application/octet-stream',
+      'properties': 'application/octet-stream',
+      'bat': 'application/octet-stream',
+      'sh': 'application/octet-stream',
     };
     return types[extension] ?? 'application/octet-stream';
   }
@@ -107,13 +114,39 @@ class SafFileService {
     bool overwrite = true,
   }) async {
     final safeName = validateChildName(fileName);
-    return _saf.writeFileBytes(
+    final extension = safeName.toLowerCase().split('.').last;
+    const extensionSensitive = <String>{
+      'gradle', 'properties', 'bat', 'sh',
+    };
+
+    // Never let a caller's generic text/plain MIME override the neutral
+    // type for extensions that Android providers commonly rewrite.
+    final effectiveMimeType = extensionSensitive.contains(extension)
+        ? 'application/octet-stream'
+        : (mimeType ?? mimeTypeForName(safeName));
+
+    var saved = await _saf.writeFileBytes(
       parentUri,
       safeName,
-      mimeType ?? mimeTypeForName(safeName),
+      effectiveMimeType,
       bytes,
       overwrite: overwrite,
     );
+
+    // Some SAF providers silently append an extension based on MIME type.
+    // Repair the returned document name immediately so the project tree
+    // contains the exact requested path, or fail visibly instead of
+    // reporting a successful save under a different filename.
+    if (!saved.isDir && saved.name != safeName) {
+      saved = await _saf.rename(saved.uri, safeName);
+      if (saved.name != safeName) {
+        throw StateError(
+          'تعذر حفظ الملف بالاسم الصحيح "$safeName"؛ '
+          'قام مزود التخزين بإرجاع "${saved.name}".',
+        );
+      }
+    }
+    return saved;
   }
 
   // إنشاء مجلد

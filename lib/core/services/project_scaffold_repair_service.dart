@@ -79,7 +79,20 @@ class ProjectScaffoldRepairService {
 
     Future<void> ensureFile(String parent, String name, String path, List<int> bytes,
         {String mime = 'text/plain'}) async {
-      final old = await saf.findChild(parentUri: parent, name: name);
+      var old = await saf.findChild(parentUri: parent, name: name);
+      if (old == null) {
+        // Recover files created by older SAF implementations that appended
+        // .txt to Gradle/config filenames despite the requested display name.
+        final legacy = await saf.findChild(parentUri: parent, name: '$name.txt');
+        if (legacy != null && !legacy.isDir) {
+          try {
+            old = await saf.renameItem(uri: legacy.uri, newName: name);
+          } catch (_) {
+            conflicts.add('$path (تعذر تصحيح الاسم القديم ${legacy.name})');
+            return;
+          }
+        }
+      }
       if (old != null) {
         if (old.isDir) conflicts.add('$path (يوجد مجلد بالاسم نفسه)');
         else present.add(path);
@@ -290,7 +303,18 @@ flutter { source = "../.." }
       }
       if (parent.isEmpty) continue;
       final name = parts.last;
-      final old = await saf.findChild(parentUri: parent, name: name);
+      var old = await saf.findChild(parentUri: parent, name: name);
+      if (old == null) {
+        final legacy = await saf.findChild(parentUri: parent, name: '$name.txt');
+        if (legacy != null && !legacy.isDir) {
+          try {
+            old = await saf.renameItem(uri: legacy.uri, newName: name);
+          } catch (_) {
+            conflicts.add('${asset.value} (تعذر تصحيح الاسم القديم)');
+            continue;
+          }
+        }
+      }
       if (old != null) {
         if (old.isDir) conflicts.add(asset.value);
         else present.add(asset.value);
@@ -300,7 +324,7 @@ flutter { source = "../.." }
       await saf.saveFile(
         parentUri: parent, fileName: name,
         bytes: data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes),
-        mimeType: name.endsWith('.jar') ? 'application/java-archive' : 'text/plain',
+        mimeType: name.endsWith('.jar') ? 'application/java-archive' : 'application/octet-stream',
         overwrite: false,
       );
       created.add(asset.value);

@@ -16,7 +16,7 @@ class TextDiffLine {
 class ProjectTextDiffReport {
   final List<TextDiffLine> lines;
   final bool usedFallback;
-  ProjectTextDiffReport(Iterable<TextDiffLine> lines,
+  const ProjectTextDiffReport(Iterable<TextDiffLine> lines,
       {this.usedFallback = false}) : lines = List.unmodifiable(lines);
 
   int get addedCount => lines.where((line) => line.kind == TextDiffKind.added).length;
